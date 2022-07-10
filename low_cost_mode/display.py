@@ -58,7 +58,7 @@ class Display:
         self.dilate = dilate
 
     def get_video_cap(self):
-        return cv2.VideoCapture(config("INPUT_FILEPATH"))
+        return cv2.VideoCapture(self.video_src)
 
     # def on_change_hue(self, event, low, key):
     #     # Key should be one of 'H', 'S', 'V'
@@ -162,16 +162,19 @@ class Display:
                     self.on_play_pause()
                     continue
 
-                # If video playing, fetch **next** frame
-                if self.video_is_playing:
-                    # Read next video frame, see if we've reached end
-                    frame_grabbed, frame = video_cap.read()
-                    if not frame_grabbed:
-                        break
-                    self.frame = frame # TODO: Clean this up (i.e. do we want self.frame or not?)
-                    cv2.setTrackbarPos("Frame", "Input", self.current_frame_index)
-                else:
-                    continue
+                # Not an optimal approach, but if paused, constantly go back one
+                # frame. This was an easy way to see live updates of frames when
+                # playing with parameters like HSV. Before, we had to unpause to
+                # see changes!
+                if not self.video_is_playing:
+                    self.current_frame_index -= 1
+
+                # Read next video frame, see if we've reached end
+                frame_grabbed, frame = video_cap.read()
+                if not frame_grabbed:
+                    break
+                self.frame = frame # TODO: Clean this up (i.e. do we want self.frame or not?)
+                cv2.setTrackbarPos("Frame", "Input", self.current_frame_index)
                 
                 if prev_frame is None:
                     prev_frame = frame
@@ -305,5 +308,4 @@ class Display:
 
 
 D = Display(video_src=config("INPUT_FILEPATH"))
-# D.display()
 D.display_video()
