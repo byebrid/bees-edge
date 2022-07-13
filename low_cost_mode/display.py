@@ -3,6 +3,10 @@ import json
 import numpy as np
 from typing import Union, Tuple, List, Dict
 import string
+from datetime import datetime as dt
+from pathlib import Path
+
+# profile = line_profiler.LineProfiler()
 
 # from window import Window
 
@@ -15,10 +19,8 @@ def config(key, default=None):
 
 KEYS = {
     "space": 32,
-    "left": 81,
-    "up": 82,
-    "right": 83,
-    "down": 84,
+    "left": 91, # Note this is actually "[", since left/right arrows are bugged in opencv with QT GUI (https://github.com/opencv/opencv/issues/20215)
+    "right": 93, # This is "]"
     "esc": 27,
     "none": 255,
 }
@@ -33,22 +35,12 @@ class Display:
         # TODO: Noticing that I need a min_area, dilate, thresh, and padding for
         # both motion detection AND colour masking. Need to think of nice way of
         # doing this
-        self.HSVs = {
-            "low": {
-                "H": 30,
-                "S": 0,
-                "V": 0
-            },
-            "upp": {
-                "H": 35,
-                "S": 255,
-                "V": 255
-            }
-        }
         self.min_area = min_area
+        self.reset_HSV() # Not actually resetting obviously
 
         self.video_src = video_src
         self.video_is_playing = True
+        self.frame_changed = False
         
         # Image processing parameters
         self.movement_thresh = movement_thresh
@@ -57,33 +49,22 @@ class Display:
         self.color_pad = color_pad
         self.dilate = dilate
 
-    def get_video_cap(self):
-        return cv2.VideoCapture(self.video_src)
+        # This is lower bound (in ms) of delay opencv waits for keyentry.
+        self.key_delay = 1
 
-    # def on_change_hue(self, event, low, key):
-    #     # Key should be one of 'H', 'S', 'V'
-    #     if low:
-    #         d = self.HSVs["low"]
-    #     else:
-    #         d = self.HSVs["upp"]
-    #     d[key] = event
-    #     self.change_flag = True
-
-    # def get_HSV(self, low=True):
-    #     if low:
-    #         d = self.HSVs["low"]
-    #     else:
-    #         d = self.HSVs["upp"]
-    #     return (d["H"], d["S"], d["V"])
-
-    # @profile
-    def display_video(self):
+    def reset_HSV(self, *args):
         self.low_H = 179
         self.low_S = 255
         self.low_V = 255
         self.high_H = 0
         self.high_S = 0
         self.high_V = 0
+
+    def get_video_cap(self):
+        return cv2.VideoCapture(self.video_src)
+
+    # @profile
+    def display_video(self, show=True, write=False):
 
         def on_mouse(event, x, y, flags, param):
             if event == cv2.EVENT_LBUTTONDBLCLK:
@@ -98,83 +79,125 @@ class Display:
                 if h < self.low_H:
                     print(f"Low Hue {self.low_H} -> {h}")
                     self.low_H = int(h)
+                    self.frame_changed = True
                 if s < self.low_S:
                     print(f"Low Sat {self.low_S} -> {s}")
                     self.low_S = int(s)
+                    self.frame_changed = True
                 if v < self.low_V:
                     print(f"Low Val {self.low_V} -> {v}")
                     self.low_V = int(v)
+                    self.frame_changed = True
                 if h > self.high_H:
                     print(f"High Hue {self.high_H} -> {h}")
                     self.high_H = int(h)
+                    self.frame_changed = True
                 if s > self.high_S:
                     print(f"High Sat {self.high_S} -> {s}")
                     self.high_S = int(s)
+                    self.frame_changed = True
                 if v > self.high_V:
                     print(f"High Val {self.high_V} -> {v}")
                     self.high_V = int(v)
+                    self.frame_changed = True
 
         def on_trackbar_movement_thresh(val):
             self.movement_thresh = val
+            self.frame_changed = True
 
         def on_trackbar_frame(val):
             self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, val)
+            self.frame_changed = True
 
+        def on_trackbar_speed(val):
+            self.key_delay = val
+            self.frame_changed = True
+    
         try:
             # Get video capture
             video_cap = self.get_video_cap()
             self.video_cap = video_cap
+
+            if write:
+                out_dir = Path("./out") / str(dt.now())
+                Path.mkdir(out_dir)
+                # Get some metadata for videos
+                fourcc = cv2.VideoWriter_fourcc(*"XVID")
+                fps = int(video_cap.get(cv2.CAP_PROP_FPS))
+                width = int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+                # opencv only accepts string filepaths, not Path objects
+                input_write_file = str(out_dir / "input.avi")
+                diff_write_file = str(out_dir / "diff.avi")
+                trail_write_file = str(out_dir / "trail.avi")
+
+                input_video_writer = cv2.VideoWriter(input_write_file, fourcc=fourcc, fps=fps, frameSize=(width, height))
+                diff_video_writer = cv2.VideoWriter(diff_write_file, fourcc=fourcc, fps=fps, frameSize=(width, height))
+                trail_video_writer = cv2.VideoWriter(trail_write_file, fourcc=fourcc, fps=fps, frameSize=(width, height))
+                # TODO: Figure out how to choose color at start?
+                # color_video_writer = cv2.VideoWriter()
             
             # Get some metadata about video
             total_frames = self.total_frames
 
             # Define windows here for clarity
-            cv2.namedWindow("Input", cv2.WINDOW_NORMAL)
-            cv2.namedWindow("Difference", cv2.WINDOW_NORMAL)
-            cv2.namedWindow("Color", cv2.WINDOW_NORMAL)
+            if show:
+                cv2.namedWindow("Input", cv2.WINDOW_NORMAL)
+                cv2.namedWindow("Difference", cv2.WINDOW_NORMAL)
+                cv2.namedWindow("Color", cv2.WINDOW_NORMAL)
+                cv2.namedWindow("Trail", cv2.WINDOW_NORMAL)
 
-            # Listen for mouse clicks on main video
-            cv2.setMouseCallback("Input", on_mouse)
-            # Add slider for threshold on motion detection
-            cv2.createTrackbar("Threshold", "Difference", self.movement_thresh, 255, on_trackbar_movement_thresh)
-            # Add slider for frame seek on main video
-            cv2.createTrackbar("Frame", "Input", 0, self.total_frames, on_trackbar_frame)
+            if show:
+                # Listen for mouse clicks on main video
+                cv2.setMouseCallback("Input", on_mouse)
+                # Add slider for threshold on motion detection
+                cv2.createTrackbar("Threshold", "Difference", self.movement_thresh, 255, on_trackbar_movement_thresh)
+                # Add slider for frame seek on main video
+                cv2.createTrackbar("Frame", "Input", self.current_frame_index, self.total_frames-1, on_trackbar_frame)
+                # Add slider for playback speed on main video
+                cv2.createTrackbar("Delay", "Input", self.key_delay, 1000, on_trackbar_speed)
+                cv2.setTrackbarMin("Delay", "Input", 1)
+                # Add "slider" to act like button to reset colour thresholds in color window
+                cv2.createButton("Reset color", self.reset_HSV)
 
             # Initialise previous frame which we'll use for motion detection/frame difference
             prev_frame = None
+            # Trail frame is a cumulative frame of all movement detection frames.
+            trail_frame = None
+            # This is to help keep track of which pixels have already been set in trail frame. Doing this to try and get more bees
+            # rather than flowers in final image!
+            trail_updates = None
 
             # Play video, with all processing
             while True:
-                # Check to see if user presses key
-                key = cv2.waitKey(1)
-                key &= 0xFF
-                if key != KEYS["none"]:
-                    keyname = KEYCODE_TO_NAME.get(key, "unknown")
-                    print(f"Keypress: {keyname}  (code={key})")
+                if self.current_frame_index % 1000 == 0:
+                    print(f"Frame {self.current_frame_index}/{self.total_frames}")
 
-                # Respond to key press
-                if key == ord("q"):
-                    break
-                elif key == ord("r"):
-                    video_cap.set(cv2.CAP_PROP_POS_FRAMES, -1)
-                    continue
-                elif key == KEYS["space"]:
-                    self.on_play_pause()
-                    continue
+                if show:
+                    # Check to see if user presses key
+                    key = cv2.waitKey(self.key_delay)
+                    key &= 0xFF
+                    if key != KEYS["none"]:
+                        keyname = KEYCODE_TO_NAME.get(key, "unknown")
+                        print(f"Keypress: {keyname}  (code={key})")
 
-                # Not an optimal approach, but if paused, constantly go back one
-                # frame. This was an easy way to see live updates of frames when
-                # playing with parameters like HSV. Before, we had to unpause to
-                # see changes!
-                if not self.video_is_playing:
-                    self.current_frame_index -= 1
-
-                # Read next video frame, see if we've reached end
-                frame_grabbed, frame = video_cap.read()
-                if not frame_grabbed:
-                    break
-                self.frame = frame # TODO: Clean this up (i.e. do we want self.frame or not?)
-                cv2.setTrackbarPos("Frame", "Input", self.current_frame_index)
+                if self.video_is_playing or self.frame_changed:
+                    if self.frame_changed and not self.video_is_playing:
+                        self.current_frame_index -= 1
+                    # Read next video frame, see if we've reached end
+                    frame_grabbed, frame = video_cap.read()
+                    if not frame_grabbed:
+                        break
+                    self.frame = frame # TODO: Clean this up (i.e. do we want self.frame or not?)
+                    # Update frame slider with current frame
+                    self.frame_changed = False
+                
+                # NOTE: Setting trackbar pos actually triggers an event on that
+                # trackbar. My listener does some expensive updates for that event,
+                # so I've commented out this live updating of trackbar.
+                # if show:
+                #     cv2.setTrackbarPos("Frame", "Input", self.current_frame_index)
                 
                 if prev_frame is None:
                     prev_frame = frame
@@ -195,26 +218,67 @@ class Display:
                 diff_frame[diff_mask] = frame[diff_mask]
                 color_frame = np.zeros(frame.shape, np.uint8)
                 color_frame[color_mask] = frame[color_mask]
+
+                # Update trail frame too
+                if trail_frame is None:
+                    trail_frame = diff_frame.copy()
+                    trail_updates = np.zeros(trail_frame.shape, dtype=bool)
+                    trail_updates[diff_mask] = True
+                else:
+                    # Double-check that none of these pixels have been updated before
+                    if not np.any(trail_updates, where=diff_mask):
+                        trail_frame[diff_mask] = frame[diff_mask]
+                        trail_updates[diff_mask] = True
                 
                 # Copy normal frame so we can add frame number without messing up original frame
-                frame_copy = frame.copy()
-                i = int(video_cap.get(cv2.CAP_PROP_POS_FRAMES))
-                
-                cv2.putText(frame_copy, f"Frame {i+1}/{total_frames}", (50, 100), self.FONT, 2, (0, 0, 255), 3)
+                if show:
+                    frame_copy = frame.copy()
+                    i = self.current_frame_index
+                    cv2.putText(frame_copy, f"Frame {i}/{total_frames}", (50, 100), self.FONT, 2, (0, 0, 255), 3)
+                    frame_copy
 
-                # Show frames of interest
-                cv2.imshow("Input", frame_copy)
-                cv2.imshow("Difference", diff_frame)
-                cv2.imshow("Color", color_frame)
+                    # Show frames of interest
+                    cv2.imshow("Input", frame_copy)
+                    cv2.imshow("Difference", diff_frame)
+                    cv2.imshow("Color", color_frame)
+                    cv2.imshow("Trail", trail_frame)
 
-                # Update previous frame now
-                prev_frame = frame
+                # Update previous frame now only if frame
+                if self.video_is_playing:
+                    prev_frame = frame
+
+                if write:
+                    # input_video_writer.write(frame)
+                    diff_video_writer.write(diff_frame)
+                    trail_video_writer.write(trail_frame)
+
+                # Respond to key press
+                if show:
+                    if key == ord("q"):
+                        break
+                    elif key == KEYS["space"]:
+                        self.on_play_pause()
+                    elif key == KEYS["left"]:
+                        self.seek_relative(-1)
+                    elif key == KEYS["right"]:
+                        self.seek_relative(+1)
+
+            # # At very end of loop, let's save that trail frame to an image
+            # if write:
+            #     trail_write_file = str(out_dir / "trail.jpg")
+            #     cv2.imwrite(trail_write_file, trail_frame)
 
         except Exception as e:
             raise e
         finally:
+            print("Releasing video capture and closing all opencv windows")
             video_cap.release()
             cv2.destroyAllWindows()
+            if write:
+                print("Releasing video writers")
+                input_video_writer.release()
+                diff_video_writer.release()
+                trail_video_writer.release()
 
     @property
     def current_frame_index(self) -> int:
@@ -226,6 +290,7 @@ class Display:
     def current_frame_index(self, val):
         if self.video_cap is not None:
             self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, val)
+            self.frame_changed = True
         else:
             raise ValueError("Can't set new frame index because `self.video_cap` is undefined!")
 
@@ -239,28 +304,23 @@ class Display:
         # Just toggle play/pause
         self.video_is_playing = not self.video_is_playing
     
-    def rewind(self, *args, **kwargs):
+    def seek_relative(self, frame_delta:int,*args, **kwargs):
+        """
+        Increment frame index by `frame_delta`. I.e., if `frame_delta` is positive,
+        this seeks right; if negative, it seeks left.
+        """
         i = self.current_frame_index
-        if i > 0:
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, i - 1)
+        new_i = i + frame_delta
+        if new_i >= 0 and new_i < self.total_frames:
+            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, new_i)
             self.frame_changed = True
         else:
-            print(f"Can't rewind! Current frame number = {i}")
-
-    def fast_forward(self, *args, **kwargs):
-        i = self.current_frame_index
-        if i < self.total_frames - 1:
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, i + 1)
-            self.frame_changed = True
-        else:
-            print(f"Can't fast-forward! Current frame number = {i} (total frames = {self.total_frames})")
+            print(f"Can't change frame from {i} to {new_i}!")
 
     def set_frame(self, i):
         self.current_frame_index = i
 
-    def set_thresh(self, thresh):
-        self.thresh = thresh
-
+    # @profile
     def soft_mask_to_bounding_boxes(self, frame:np.ndarray, thresh:int, pad: int, color=cv2.COLOR_BGR2GRAY):
         """
         Convert a 'soft mask' (e.g. difference between two frames, or all pixels
@@ -285,7 +345,7 @@ class Display:
         dilated = cv2.dilate(threshed, dilate_kernel)
         contours, hierarchy = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-        mask = np.zeros(frame.shape, np.uint8)
+        mask = np.zeros(frame.shape, bool) # Array of all False
         for contour in contours:
             if cv2.contourArea(contour) < self.min_area:
                 continue
@@ -300,12 +360,11 @@ class Display:
             x1 += pad
             y1 += pad
 
-            # mask[y0:y1, x0:x1] = frame[y0:y1, x0:x1]  # Note numpy arrays are rows, then columns, opposite order to opencv!
-            mask[y0:y1, x0:x1] = 1
+            mask[y0:y1, x0:x1] = True
 
-        return mask > 0
-
+        return mask
 
 
-D = Display(video_src=config("INPUT_FILEPATH"))
-D.display_video()
+
+D = Display(video_src=config("INPUT_FILEPATH"), movement_pad=5, movement_thresh=80)
+D.display_video(write=True, show=True)
