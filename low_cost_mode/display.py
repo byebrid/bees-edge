@@ -5,6 +5,8 @@ from typing import Union, Tuple, List, Dict
 import string
 from datetime import datetime as dt
 from pathlib import Path
+from queue import Queue
+from threading import Thread
 
 # profile = line_profiler.LineProfiler()
 
@@ -26,6 +28,65 @@ KEYS = {
 }
 KEYS.update({l: ord(l) for l in string.ascii_lowercase})
 KEYCODE_TO_NAME = {v: k for k, v in KEYS.items()}
+
+
+class ThreadedVideo:
+    """
+    Use this to perform read operations on a different thread to eliminate blocking
+    times where possible.
+
+    Stolen from https://pyimagesearch.com/2017/02/06/faster-video-file-fps-with-cv2-videocapture-and-opencv/.
+    """
+    def __init__(self, path, queue_size=512):
+        self.stream = cv2.VideoCapture(path)
+        self.stopped = False
+
+        self.Q = Queue(maxsize=queue_size)
+
+    def start(self):
+        # start a thread to read frames from the file video stream
+        t = Thread(target=self.update)
+        # t.daemon = True
+        t.start()
+        return self
+
+    def get(self, key):
+        return self.stream.get(key)
+
+    # def set(self, key, val):
+    #     self.stream.set(key, val)
+
+    def update(self):
+        # keep looping infinitely
+        while True:
+            # if the thread indicator variable is set, stop the
+            # thread
+            if self.stopped:
+                self.stream.release()
+                return
+            # otherwise, ensure the queue has room in it
+            if not self.Q.full():
+                # read the next frame from the file
+                grabbed, frame = self.stream.read()
+                # if the `grabbed` boolean is `False`, then we have
+                # reached the end of the video file
+                if not grabbed:
+                    self.stop()
+                    return
+                # add the frame to the queue
+                self.Q.put(frame)
+
+    def read(self):
+        # return next frame in the queue
+        return self.Q.get()
+
+    def more(self):
+        # return True if there are still frames in the queue
+        return self.Q.qsize() > 0
+
+    def stop(self):
+        # indicate that the thread should be stopped
+        self.stopped = True
 
 
 class Display:
@@ -60,8 +121,40 @@ class Display:
         self.high_S = 0
         self.high_V = 0
 
-    def get_video_cap(self):
-        return cv2.VideoCapture(self.video_src)
+    def get_video_cap(self) -> ThreadedVideo:
+        return ThreadedVideo(self.video_src, queue_size=2048)
+
+    def play_threaded_video(self):
+        try:
+            stream = self.get_video_cap().start()
+            cv2.namedWindow("Video")
+
+            while stream.more():
+                frame = stream.read()
+                cv2.putText(frame, f"Queue size: {stream.Q.qsize()}", (10, 50), self.FONT, 1, (0, 0, 255), thickness=3)
+                cv2.imshow("Video", frame)
+                cv2.waitKey(1)
+
+        except Exception as e:
+            raise
+        finally:
+            print("Making sure video is stopped")
+            stream.stop()
+            print("Destroying all windows")
+            cv2.destroyAllWindows()
+
+    def show_color_picker():
+        """
+        TODO: This should pop up a still from a video to let us pick the right
+        pixels (and therefore HSV bounds) to select only flowers from a video.
+        
+        I think I want this such that if user manually passes in HSV values into
+        __init__(), then we just use those, else we try to call this method (or
+        just ignore it if we're not worried about color).
+
+        And yes, color not colour just because opencv told me to.
+        """
+        pass
 
     # @profile
     def display_video(self, show=True, write=False):
@@ -105,9 +198,9 @@ class Display:
             self.movement_thresh = val
             self.frame_changed = True
 
-        def on_trackbar_frame(val):
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, val)
-            self.frame_changed = True
+        # def on_trackbar_frame(val):
+        #     self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, val)
+        #     self.frame_changed = True
 
         def on_trackbar_speed(val):
             self.key_delay = val
@@ -115,7 +208,7 @@ class Display:
     
         try:
             # Get video capture
-            video_cap = self.get_video_cap()
+            video_cap = self.get_video_cap().start()
             self.video_cap = video_cap
 
             if write:
@@ -154,7 +247,7 @@ class Display:
                 # Add slider for threshold on motion detection
                 cv2.createTrackbar("Threshold", "Difference", self.movement_thresh, 255, on_trackbar_movement_thresh)
                 # Add slider for frame seek on main video
-                cv2.createTrackbar("Frame", "Input", self.current_frame_index, self.total_frames-1, on_trackbar_frame)
+                # cv2.createTrackbar("Frame", "Input", self.current_frame_index, self.total_frames-1, on_trackbar_frame)
                 # Add slider for playback speed on main video
                 cv2.createTrackbar("Delay", "Input", self.key_delay, 1000, on_trackbar_speed)
                 cv2.setTrackbarMin("Delay", "Input", 1)
@@ -169,8 +262,9 @@ class Display:
             # rather than flowers in final image!
             trail_updates = None
 
+
             # Play video, with all processing
-            while True:
+            while video_cap.more():
                 if self.current_frame_index % 1000 == 0:
                     print(f"Frame {self.current_frame_index}/{self.total_frames}")
 
@@ -183,12 +277,13 @@ class Display:
                         print(f"Keypress: {keyname}  (code={key})")
 
                 if self.video_is_playing or self.frame_changed:
-                    if self.frame_changed and not self.video_is_playing:
-                        self.current_frame_index -= 1
+                    # if self.frame_changed and not self.video_is_playing:
+                    #     self.current_frame_index -= 1
                     # Read next video frame, see if we've reached end
-                    frame_grabbed, frame = video_cap.read()
-                    if not frame_grabbed:
-                        break
+                    # frame_grabbed, frame = video_cap.read()
+                    frame = video_cap.read()
+                    # if not frame_grabbed:
+                    #     break
                     self.frame = frame # TODO: Clean this up (i.e. do we want self.frame or not?)
                     # Update frame slider with current frame
                     self.frame_changed = False
@@ -234,7 +329,7 @@ class Display:
                 if show:
                     frame_copy = frame.copy()
                     i = self.current_frame_index
-                    cv2.putText(frame_copy, f"Frame {i}/{total_frames}", (50, 100), self.FONT, 2, (0, 0, 255), 3)
+                    cv2.putText(frame_copy, f"Frame {i}/{total_frames}; Queue={video_cap.Q.qsize()}", (50, 100), self.FONT, 2, (0, 0, 255), 3)
                     frame_copy
 
                     # Show frames of interest
@@ -272,7 +367,8 @@ class Display:
             raise e
         finally:
             print("Releasing video capture and closing all opencv windows")
-            video_cap.release()
+            # video_cap.release()
+            video_cap.stop()
             cv2.destroyAllWindows()
             if write:
                 print("Releasing video writers")
@@ -286,13 +382,13 @@ class Display:
             return int(self.video_cap.get(cv2.CAP_PROP_POS_FRAMES))
         return -1
 
-    @current_frame_index.setter
-    def current_frame_index(self, val):
-        if self.video_cap is not None:
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, val)
-            self.frame_changed = True
-        else:
-            raise ValueError("Can't set new frame index because `self.video_cap` is undefined!")
+    # @current_frame_index.setter
+    # def current_frame_index(self, val):
+    #     if self.video_cap is not None:
+    #         self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, val)
+    #         self.frame_changed = True
+    #     else:
+    #         raise ValueError("Can't set new frame index because `self.video_cap` is undefined!")
 
     @property
     def total_frames(self) -> int:
@@ -304,21 +400,18 @@ class Display:
         # Just toggle play/pause
         self.video_is_playing = not self.video_is_playing
     
-    def seek_relative(self, frame_delta:int,*args, **kwargs):
-        """
-        Increment frame index by `frame_delta`. I.e., if `frame_delta` is positive,
-        this seeks right; if negative, it seeks left.
-        """
-        i = self.current_frame_index
-        new_i = i + frame_delta
-        if new_i >= 0 and new_i < self.total_frames:
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, new_i)
-            self.frame_changed = True
-        else:
-            print(f"Can't change frame from {i} to {new_i}!")
-
-    def set_frame(self, i):
-        self.current_frame_index = i
+    # def seek_relative(self, frame_delta:int,*args, **kwargs):
+    #     """
+    #     Increment frame index by `frame_delta`. I.e., if `frame_delta` is positive,
+    #     this seeks right; if negative, it seeks left.
+    #     """
+    #     i = self.current_frame_index
+    #     new_i = i + frame_delta
+    #     if new_i >= 0 and new_i < self.total_frames:
+    #         self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, new_i)
+    #         self.frame_changed = True
+    #     else:
+    #         print(f"Can't change frame from {i} to {new_i}!")
 
     # @profile
     def soft_mask_to_bounding_boxes(self, frame:np.ndarray, thresh:int, pad: int, color=cv2.COLOR_BGR2GRAY):
@@ -367,4 +460,5 @@ class Display:
 
 
 D = Display(video_src=config("INPUT_FILEPATH"), movement_pad=5, movement_thresh=80)
-D.display_video(write=True, show=True)
+D.display_video(write=False, show=True)
+# D.play_threaded_video()
