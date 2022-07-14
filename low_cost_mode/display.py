@@ -27,7 +27,9 @@ KEYS = {
     "esc": 27,
     "none": 255,
 }
+# Add lowercase letters to dictionary as well so we better recognise user inputs
 KEYS.update({l: ord(l) for l in string.ascii_lowercase})
+# Keep reverse mapping to for when we know keycode, but want to know human-readable name
 KEYCODE_TO_NAME = {v: k for k, v in KEYS.items()}
 
 
@@ -90,22 +92,56 @@ class ThreadedVideo:
 
 class ThreadedVideoWriter:
     def __init__(self, *args, queue_size=64, flush_thresh=32, **kwargs):
+        """
+
+        Parameters
+        ----------
+        queue_size: int
+            Maximum number of frames we are allowed to store in this writer's 
+            queue.
+        flush_thresh: int
+            The number of frames we will allow in the queue before trying to
+            write to a file. This should be less than `queue_size`, 
+        """
+        # Just validate parameters
+        if flush_thresh >= queue_size:
+            raise ValueError(f"flush_thresh ({flush_thresh}) should be considerable less than queue_size {queue_size}!")
+
         self.Q = Queue(maxsize=queue_size)
         self.flush_thresh = flush_thresh
-        self.t = None
+        self.t = None # to keep track of current writing Thread
         self.video = cv2.VideoWriter(*args, **kwargs)
-        self.dumping = False
+        self.dumping = False # to keep track of whether we are currently writing to file or not
 
     def release(self):
-        if self.thread_alive():
-            self.t.join()
+        """
+        Flushes final frames in queue to file, making sure to wait for previous
+        thread. 
+
+        This is blocking, unlike the normal `write()`. 
+        """
+        # Dump remaining frames before closing thread
+        self.start_thread(wait=True, block=True)
 
     def write(self, frame):
+        """
+        Meant to mimic `cv2.VideoWriter.write(image)`. This actually only adds
+        the given `frame` to a queue.
+
+        If the queue size exceeds `flush_thresh`, then this will trigger a flush
+        of all frames in the queue into the file. See `start_thread()` for more
+        details.
+        """
         self.Q.put(frame)
         if self.Q.qsize() >= self.flush_thresh and not self.dumping:
-            self.dump()
+            self.start_thread()
 
-    def update(self):
+    def dump(self):
+        """
+        Writes all frames in queue to output file. Note if new frames are added
+        to queue in meantime, these will also be written, meaning we typically
+        write a few more than `flush_thresh` frames when we call this!
+        """
         self.dumping = True
 
         while not self.Q.empty():
@@ -118,14 +154,34 @@ class ThreadedVideoWriter:
     def thread_alive(self):
         return self.t and self.t.is_alive()
 
-    def dump(self, wait=False):
+    def start_thread(self, wait=False, block=False):
+        """
+        This kicks off a new thread which starts writing all frames in the queue
+        to the output file.
+
+        Parameters
+        ----------
+        wait: bool
+            Set this to True if you are expecting there to be a previous thread 
+            still running. This might happen if you have finished going through
+            a video, but still need to flush a few more frames right after.
+            If False, then will raise a ValueError if a previous thread is already
+            running.
+        block: bool
+            Whether to make the new thread blocking or not. Useful if you need to
+            ensure this thread finishes before the main thread continues (i.e. at
+            the end of execution)/
+        """
         if self.dumping:
             if wait: # let old thread block main thread so it can finish before starting our next one.
                 self.t.join()
             else:
                 raise ValueError("Tried to dump but previous thread was still running!")
-        self.t = Thread(target=self.update)
+        self.t = Thread(target=self.dump)
         self.t.start()
+
+        if block:
+            self.t.join()
 
 
 class Display:
@@ -160,6 +216,20 @@ class Display:
 
         # Set up video writers
         self.writers = []
+
+        # Register the variables we want to save to a json file later. This makes sure
+        # we don't forget how we got a particular output.        
+        self.register_metadata(
+            "video_src",
+            "min_area",
+            "movement_thresh",
+            "movement_pad",
+            "color_thresh",
+            "color_pad",
+            "dilate",
+            "downsample",
+            "fourcc"
+        )
         
     def reset_HSV(self, *args):
         self.low_H = 179
@@ -312,29 +382,16 @@ class Display:
                 prev_frame = frame
 
                 if write:
-                    # if len(write_frames) > write_buffer or self.current_frame_index == self.total_frames - 1:
-                    #     for write_frame in write_frames:
-                    #         diff_video_writer.write(diff_frame)
-                    #     write_frames = []
-                    # else:
-                    #     write_frames.append(diff_frame)
                     diff_video_writer.write(diff_frame)
                     # input_video_writer.write(frame)
                     # diff_video_writer.write(diff_frame)
                     # trail_video_writer.write(trail_frame)
-                    # print(f"Queue size: {trail_video_writer.Q.qsize()}")
+                    # print(f"Queue size: {trail_video_writer.Q.qsize()}")utou
 
                 # Respond to key press
                 if show:
                     if key == ord("q"):
                         break
-                    # elif key == KEYS["space"]:
-                    #     self.on_play_pause()
-                    # elif key == KEYS["left"]:
-                    #     self.seek_relative(-1)
-                    # elif key == KEYS["right"]:
-                    #     self.seek_relative(+1)
-            diff_video_writer.dump(wait=True)
         except Exception as e:
             print(e)
         finally:
@@ -346,6 +403,7 @@ class Display:
             video_cap.release()
             print("Destroying all windows")
             cv2.destroyAllWindows()
+
             if write:
                 print("Releasing video writers")
                 # input_video_writer.release()
@@ -356,21 +414,31 @@ class Display:
                 meta_fp = out_sub_dir / "meta.json"
                 self.save_metadata(fp=meta_fp)
 
+    def register_metadata(self, *keys):
+        self._meta_keys = keys
+
     def save_metadata(self, fp):
+        meta_d = {}
+        # Use this loop to deal with possible missing values
+        for key in self._meta_keys:
+            try:
+                val = self.__getattribute__(key)
+            except AttributeError:
+                val = "Not found"
+            meta_d[key] = val
+
+        # TODO: Think about if I really want to update these values here, or just
+        # put them in __init__() with the rest (which is possible, but feels wrong).
+        meta_d.update({
+            "time_taken": str(self.total_time),
+            "start_datetime": str(self.start_time),
+        })
+
+        # Sort alphabetically because it's easier to read
+        meta_d = dict(sorted(meta_d.items()))
+
         with open(fp, "w") as f:
-            json.dump({
-                "input": self.video_src,
-                "min_area": self.min_area,
-                "movement_thresh": self.movement_thresh,
-                "movement_pad": self.movement_pad,
-                "color_thresh": self.color_thresh,
-                "color_pad": self.color_pad,
-                "dilate": self.dilate,
-                "output_fourcc": self.fourcc,
-                "time_taken": str(self.total_time),
-                "start_datetime": str(self.start_time),
-                "downsample": self.downsample,
-            }, fp=f)
+            json.dump(meta_d, fp=f)
 
     def get_video_prop(self, prop: int) -> int:
         """
