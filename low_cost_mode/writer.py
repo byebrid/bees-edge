@@ -5,7 +5,7 @@ import cv2
 
 
 class ThreadedVideoWriter:
-    def __init__(self, *args, queue_size=64, flush_thresh=32, **kwargs):
+    def __init__(self, filename: str, fourcc: int, fps: int, frameSize: int, queue_size: int, flush_thresh: int, **kwargs):
         """
 
         Parameters
@@ -26,10 +26,8 @@ class ThreadedVideoWriter:
         self.Q = Queue(maxsize=queue_size)
         self.flush_thresh = flush_thresh
         self.t = None  # to keep track of current writing Thread
-        self.video = cv2.VideoWriter(*args, **kwargs)
-        self.dumping = (
-            False  # to keep track of whether we are currently writing to file or not
-        )
+        self.video = cv2.VideoWriter(filename=filename, fourcc=fourcc, fps=fps, frameSize=frameSize)
+        self.dumping = False  # to keep track of whether we are currently writing to file or not
 
     def release(self):
         """

@@ -3,13 +3,14 @@ import string
 from datetime import datetime as dt
 from functools import lru_cache
 from pathlib import Path
-from queue import Queue
-from threading import Thread
 from typing import Dict, List, Tuple, Union
 
 import cv2
 import numpy as np
 from tqdm import tqdm
+from windows.window import Window
+from windows.movement_window import MovementWindow
+from windows.input_window import InputWindow
 
 # Just to deal with @profile decorator from line_profiler. It's a weird system but whatever
 if type(__builtins__) is not dict or "profile" not in __builtins__:
@@ -36,75 +37,6 @@ KEYS.update({l: ord(l) for l in string.ascii_lowercase})
 KEYCODE_TO_NAME = {v: k for k, v in KEYS.items()}
 
 
-class Window(ABC):
-    DEFAULT_FOURCC = "XVID"
-    DEFAULT_EXT = ".avi"
-
-    def __init__(
-        self,
-        *,
-        name: str,
-        show: bool = False,
-        write: bool = False,
-        output_dir: str = None,
-        queue_size=100,
-        flush_thresh=50,
-        fourcc: int = None,
-        fps: int = None,
-        frame_size: Tuple[int, int] = None,
-        **kwargs,
-    ):
-        """
-        ! You must use keyword arguments with this initialiser !
-        """
-        if write and output_dir is None:
-            raise ValueError("Can't write if no `output_dir` specified!")
-        if (show or write) and (frame_size is None or fps is None):
-            raise ValueError("Can't show or write if `frame_size` or `fps` is None!")
-        if fourcc is None:
-            print(f"No fourcc provided, assuming default '{self.DEFAULT_FOURCC}'")
-            fourcc = cv2.VideoWriter_fourcc(*self.DEFAULT_FOURCC)
-
-        # Just storing all initial parameters
-        self._name = name
-        self._show = show
-        self._write = write
-        self._output_dir = output_dir
-        self._queue_size = queue_size
-        self._flush_thresh = flush_thresh
-        self._fourcc = fourcc
-        self._fps = fps
-        self._frame_size = frame_size
-
-        # Creating cv2 window and/or Writer if needed
-        if show:
-            cv2.namedWindow(name)
-        if write:
-            output_file = Path(output_dir) / name
-            output_file = str(output_file.with_suffix(self.DEFAULT_EXT))
-            self._output_file = output_file
-            self._writer = ThreadedVideoWriter(
-                queue_size=queue_size,
-                flush_thresh=flush_thresh,
-                filename=output_file,
-                fourcc=fourcc,
-                fps=fps,
-                frameSize=frame_size,
-            )
-
-        self._frame = None
-
-    def show(self):
-        cv2.imshow(self._name, self._frame)
-
-    def write(self):
-        self._writer.write(self._frame)
-
-    @abstractmethod
-    def update(self):
-        pass
-
-
 class App:
     FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -112,143 +44,111 @@ class App:
         self,
         *,
         video_src: str,
-        out_dir: str,
-        fourcc: int = None,
-        min_area: int = 10,
-        dilate: int = 3,
-        movement_thresh: int = 40,
-        color_thresh: int = 30,
-        movement_pad: int = 20,
-        color_pad: int = 5,
-        downsample: float = 1.0,
+        output_dir: str,
+        output_ext: str,
+        show: bool,
+        write: bool,
+        queue_size: int,
+        flush_thresh: int,
+        fourcc: int,
+        frame_size: Tuple[int, int],
+        movement_kwargs: dict,
+        color_kwargs:dict
     ):
-        # TODO: Noticing that I need a min_area, dilate, thresh, and padding for
-        # both motion detection AND colour masking. Need to think of nice way of
-        # doing this
-        self.reset_HSV()  # Not actually resetting obviously
+        # # Register the variables we want to save to a json file later. This makes sure
+        # # we don't forget how we got a particular output.
+        # self.register_metadata(
+        #     "video_src",
+        #     "min_area",
+        #     "movement_thresh",
+        #     "movement_pad",
+        #     "color_thresh",
+        #     "color_pad",
+        #     "dilate",
+        #     "downsample",
+        #     "fourcc",
+        # )
+        self._video_src = video_src
+        self._output_dir = output_dir
+        self._output_ext = output_ext
+        self._show = show
+        self._write = write
+        self._queue_size = queue_size
+        self._flush_thresh = flush_thresh
+        self._fourcc = fourcc
+        self._frame_size = frame_size
+        self._movement_kwargs = movement_kwargs
+        self._color_kwargs = color_kwargs
 
-        # Filepaths
-        self.video_src = video_src
-        self.out_dir = Path(out_dir)
-
-        # Video encoding stuff
-        if fourcc is None:
-            fourcc = cv2.VideoWriter_fourcc(*"XVID")
-        self.fourcc = fourcc
-
-        # Image processing parameters
-        self.min_area = min_area
-        self.movement_thresh = movement_thresh
-        self.movement_pad = movement_pad
-        self.color_thresh = color_thresh
-        self.color_pad = color_pad
-        self.dilate = dilate
-        self.downsample = downsample
-
-        # This is lower bound (in ms) of delay opencv waits for keyentry.
-        self.key_delay = 1
-
-        # Register the variables we want to save to a json file later. This makes sure
-        # we don't forget how we got a particular output.
-        self.register_metadata(
-            "video_src",
-            "min_area",
-            "movement_thresh",
-            "movement_pad",
-            "color_thresh",
-            "color_pad",
-            "dilate",
-            "downsample",
-            "fourcc",
-        )
+        # Create video reader
+        self._reader = cv2.VideoCapture(filename=video_src)
+        # Get video parameters
+        self._fps = fps = self.get_video_prop(cv2.CAP_PROP_FPS)
+        self._width = self.get_video_prop(cv2.CAP_PROP_FRAME_WIDTH)
+        self._height = self.get_video_prop(cv2.CAP_PROP_FRAME_HEIGHT)
+        frame_size = (self._width, self._height)
 
         # Set up Windows?
-        self.input_win = Window(name="Input", show=show)
+        self._input_win = InputWindow(
+            show=show,
+            write=write,
+            output_ext=output_ext,
+            queue_size=queue_size,
+            flush_thresh=flush_thresh,
+            fourcc=fourcc,
+            fps=fps,
+            frame_size=frame_size
+        )
+        self._movement_win = MovementWindow(
+            show=show,
+            write=write,
+            output_ext=output_ext,
+            queue_size=queue_size,
+            flush_thresh=flush_thresh,
+            fourcc=fourcc,
+            fps=fps,
+            frame_size=frame_size,
+            thresh=movement_kwargs["THRESH"],
+            dilate=movement_kwargs["DILATE"],
+            pad=movement_kwargs["PAD"],
+            min_area=movement_kwargs["MIN_AREA"]
+        )
 
-    def reset_HSV(self, *args):
-        """
-        Resets lower and upper bounds for HSV values such that colour thresholding
-        against them always leads to an all-black frame.
-        """
-        self.low_H = 179
-        self.low_S = 255
-        self.low_V = 255
-        self.high_H = 0
-        self.high_S = 0
-        self.high_V = 0
+        self._windows = [self._input_win, self._movement_win] # type: List[Window]
 
-    def get_video_cap(self):
-        return cv2.VideoCapture(filename=self.video_src)
-
-    def show_color_picker():
-        """
-        TODO: This should pop up a still from a video to let us pick the right
-        pixels (and therefore HSV bounds) to select only flowers from a video.
-
-        I think I want this such that if user manually passes in HSV values into
-        __init__(), then we just use those, else we try to call this method (or
-        just ignore it if we're not worried about color).
-
-        And yes, color not colour just because opencv told me to.
-        """
-        pass
+        self.register_metadata(
+            "video_src",
+            "output_dir",
+            "output_ext",
+            "show",
+            "write",
+            "queue_size",
+            "flush_thresh",
+            "fourcc",
+            "frame_size",
+            "movement_kwargs",
+            "color_kwargs"
+        )
 
     @profile
-    def start(self, show=True, write=False):
+    def start(self):
         try:
             self.start_time = dt.now()
 
-            # Get video capture
-            video_cap = self.get_video_cap()
-            self.video_cap = video_cap
-
             if write:
                 # Make output sub-directory just for this run
-                out_sub_dir = self.out_dir / str(self.start_time)
+                out_sub_dir = Path(self._output_dir) / str(self.start_time)
                 Path.mkdir(out_sub_dir)
 
-                # Get some metadata for videos
-                fourcc = self.fourcc
-                fps = self.fps
-                width, height = self.shape
+                # Make sure each window writes to this run's sub-directory
+                for window in self._windows:
+                    window.prepare_writer(output_dir=out_sub_dir)
 
-                # opencv only accepts string filepaths, not Path objects
-                input_write_file = str(
-                    out_sub_dir / "input.avi"
-                )  # for copy of input file, testing opencv encoding
-                diff_write_file = str(out_sub_dir / "diff.avi")  # for difference frames
-                trail_write_file = str(out_sub_dir / "trail.avi")  # for bee trail video
-
-                # Create writers for whichever videos you want to output
-                # input_video_writer = cv2.VideoWriter(filename=input_write_file, fourcc=self.fourcc, fps=fps, frameSize=(width, height))
-                # diff_video_writer = cv2.VideoWriter(filename=diff_write_file, fourcc=self.fourcc, fps=fps, frameSize=(width, height))
-                # trail_video_writer = cv2.VideoWriter(filename=trail_write_file, fourcc=self.fourcc, fps=fps, frameSize=(width, height))
-
-                # input_video_writer = ThreadedVideoWriter(filename=input_write_file, fourcc=fourcc, fps=fps, frameSize=(width, height)).start()
-                diff_video_writer = ThreadedVideoWriter(
-                    queue_size=256,
-                    flush_thresh=100,
-                    filename=diff_write_file,
-                    fourcc=self.fourcc,
-                    fps=fps,
-                    frameSize=(width, height),
-                )
-                # trail_video_writer = ThreadedVideoWriter(filename=trail_write_file, fourcc=fourcc, fps=fps, frameSize=(width, height)).start()
-
-            # Define windows here for clarity
-            if show:
-                cv2.namedWindow("Input", cv2.WINDOW_NORMAL)
-                cv2.namedWindow("Difference", cv2.WINDOW_NORMAL)
-                cv2.namedWindow("Color", cv2.WINDOW_NORMAL)
-                cv2.namedWindow("Trail", cv2.WINDOW_NORMAL)
-
-            # Initialise previous frame which we'll use for motion detection/frame difference
-            prev_frame = None
-            # Trail frame is a cumulative frame of all movement detection frames.
-            trail_frame = None
-            # This is to help keep track of which pixels have already been set in trail frame. Doing this to try and get more bees
-            # rather than flowers in final image!
-            trail_updates = None
+            # # Trail frame is a cumulative frame of all movement detection frames.
+            # trail_frame = None
+            # # This is to help keep track of which pixels have already been set in trail frame. Doing this to try and get more bees
+            # # rather than flowers in final image!
+            # trail_updates = None
 
             # Play video, with all processing
             while True:
@@ -257,127 +157,98 @@ class App:
 
                 if show:
                     # Check to see if user presses key
-                    key = cv2.waitKey(self.key_delay)
+                    key = cv2.waitKey(1)
                     key &= 0xFF
-                    if key != KEYS["none"]:
+                    if key == KEYS["q"]:
+                        print("User pressed 'q', exiting...")
+                        break
+                    elif key != KEYS["none"]:
                         keyname = KEYCODE_TO_NAME.get(key, "unknown")
                         print(f"Keypress: {keyname}  (code={key})")
+                    
 
                 # Read next video frame, see if we've reached end
-                frame_grabbed, orig_frame = video_cap.read()
+                frame_grabbed, frame = self._reader.read()
                 if not frame_grabbed:
                     break
 
-                # Resize frame if required
-                if self.downsample < 1:
-                    frame = orig_frame.copy()
-                    frame = cv2.resize(
-                        frame, dsize=None, fx=self.downsample, fy=self.downsample
-                    )
-                else:
-                    frame = orig_frame
+                for window in self._windows:
+                    window.update(frame=frame)
 
-                if prev_frame is None:
-                    prev_frame = frame
+                    if self._show:
+                        window.show()
+                    if self._write:
+                        window.write()
 
-                # Get mask based on movement
-                diff = cv2.absdiff(frame, prev_frame)
-                diff_mask = self.get_mask(
-                    diff, thresh=self.movement_thresh, pad=self.movement_pad
-                )
+                # # Resize frame if required
+                # if self.downsample < 1:
+                #     frame = orig_frame.copy()
+                #     frame = cv2.resize(
+                #         frame, dsize=None, fx=self.downsample, fy=self.downsample
+                #     )
+                # else:
+                #     frame = orig_frame
 
-                # Get mask based on color
-                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                hsv_low = (self.low_H, self.low_S, self.low_V)
-                hsv_high = (self.high_H, self.high_S, self.high_V)
-                inrange = cv2.inRange(hsv, hsv_low, hsv_high)
-                color_mask = self.get_mask(
-                    inrange, thresh=self.color_thresh, pad=self.color_pad, color=None
-                )
+                # # Get mask based on color
+                # hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                # hsv_low = (self.low_H, self.low_S, self.low_V)
+                # hsv_high = (self.high_H, self.high_S, self.high_V)
+                # inrange = cv2.inRange(hsv, hsv_low, hsv_high)
+                # color_mask = self.get_mask(
+                #     inrange, thresh=self.color_thresh, pad=self.color_pad, color=None
+                # )
 
-                # Figure out upsample ratio
-                if self.downsample < 1:
-                    upsample_x = int(width / frame.shape[1])
-                    upsample_y = int(height / frame.shape[0])
-                    diff_mask = diff_mask.repeat(upsample_x, axis=1).repeat(
-                        upsample_y, axis=0
-                    )
-                    color_mask = color_mask.repeat(upsample_x, axis=1).repeat(
-                        upsample_y, axis=0
-                    )
+                # # Figure out upsample ratio
+                # if self.downsample < 1:
+                #     upsample_x = int(width / frame.shape[1])
+                #     upsample_y = int(height / frame.shape[0])
+                #     diff_mask = diff_mask.repeat(upsample_x, axis=1).repeat(
+                #         upsample_y, axis=0
+                #     )
+                #     color_mask = color_mask.repeat(upsample_x, axis=1).repeat(
+                #         upsample_y, axis=0
+                #     )
 
-                # Convert masks to actual frames containing masked pixel data
-                diff_frame = np.zeros(orig_frame.shape, np.uint8)
-                diff_frame[diff_mask] = orig_frame[diff_mask]
-                color_frame = np.zeros(orig_frame.shape, np.uint8)
-                color_frame[color_mask] = orig_frame[color_mask]
+                # color_frame = np.zeros(orig_frame.shape, np.uint8)
+                # color_frame[color_mask] = orig_frame[color_mask]
 
-                # Update trail frame too
-                if trail_frame is None:
-                    trail_frame = diff_frame.copy()
-                    trail_updates = np.zeros(trail_frame.shape, dtype=bool)
-                    trail_updates[diff_mask] = True
-                else:
-                    # Double-check that none of these pixels have been updated before
-                    if not np.any(trail_updates, where=diff_mask):
-                        trail_frame[diff_mask] = orig_frame[diff_mask]
-                        trail_updates[diff_mask] = True
+                # # Update trail frame too
+                # if trail_frame is None:
+                #     trail_frame = diff_frame.copy()
+                #     trail_updates = np.zeros(trail_frame.shape, dtype=bool)
+                #     trail_updates[diff_mask] = True
+                # else:
+                #     # Double-check that none of these pixels have been updated before
+                #     if not np.any(trail_updates, where=diff_mask):
+                #         trail_frame[diff_mask] = orig_frame[diff_mask]
+                #         trail_updates[diff_mask] = True
 
-                # Copy normal frame so we can add frame number without messing up original frame
-                if show:
-                    i = self.current_frame_index
-                    cv2.putText(
-                        frame_copy,
-                        f"Frame {i}/{total_frames}",
-                        (50, 100),
-                        self.FONT,
-                        2,
-                        (0, 0, 255),
-                        3,
-                    )
-                    frame_copy
-
-                    # Show frames of interest
-                    cv2.imshow("Input", frame_copy)
-                    cv2.imshow("Difference", diff_frame)
-                    cv2.imshow("Color", color_frame)
-                    cv2.imshow("Trail", trail_frame)
-
-                # Update previous frame now
-                prev_frame = frame
-
-                if write:
-                    diff_video_writer.write(diff_frame)
-                    # input_video_writer.write(frame)
-                    # diff_video_writer.write(diff_frame)
-                    # trail_video_writer.write(trail_frame)
-                    # print(f"Queue size: {trail_video_writer.Q.qsize()}")utou
-
-                # Respond to key press
-                if show:
-                    if key == ord("q"):
-                        break
-        except Exception as e:
-            print(e)
+                # # Copy normal frame so we can add frame number without messing up original frame
+                # if show:
+                #     i = self.current_frame_index
+                #     cv2.putText(
+                #         frame_copy,
+                #         f"Frame {i}/{total_frames}",
+                #         (50, 100),
+                #         self.FONT,
+                #         2,
+                #         (0, 0, 255),
+                #         3,
+                #     )
         finally:
             self.end_time = dt.now()
             self.total_time = self.end_time - self.start_time
             print(f"Took {self.total_time.seconds} seconds")
 
-            print("Releasing video capture")
-            video_cap.release()
-            print("Destroying all windows")
-            cv2.destroyAllWindows()
+            print("Releasing resources")
+            self._reader.release()
+            for window in self._windows:
+                window.release()
 
-            if write:
-                print("Releasing video writers")
-                # input_video_writer.release()
-                diff_video_writer.release()
-                # trail_video_writer.release()
-                print("Saving metadata to file")
-                # Meta file
-                meta_fp = out_sub_dir / "meta.json"
-                self.save_metadata(fp=meta_fp)
+            # TODO: Maybe just copy config.json, but append extra data like time taken, etc.?
+            meta_fp = out_sub_dir / "meta.json"
+            # print(f"Copying config.json to {meta_fp}")
+            self.save_metadata(fp=meta_fp)
 
     def register_metadata(self, *keys):
         self._meta_keys = keys
@@ -387,7 +258,7 @@ class App:
         # Use this loop to deal with possible missing values
         for key in self._meta_keys:
             try:
-                val = self.__getattribute__(key)
+                val = self.__getattribute__(f"_{key}") # I've been prepending underscores to attributes!
             except AttributeError:
                 val = "Not found"
             meta_d[key] = val
@@ -412,8 +283,8 @@ class App:
         Helper method to get video capture properties as integers, defaulting
         to -1 if video capture doesn't exist.
         """
-        if self.video_cap is not None:
-            return int(self.video_cap.get(prop))
+        if self._reader is not None:
+            return int(self._reader.get(prop))
         return -1
 
     @property
@@ -438,68 +309,30 @@ class App:
         height = self.get_video_prop(cv2.CAP_PROP_FRAME_HEIGHT)
         return width, height
 
-    @profile
-    def get_mask(
-        self, frame: np.ndarray, thresh: int, pad: int, color=cv2.COLOR_BGR2GRAY
-    ):
-        """
-        Convert a 'soft mask' (e.g. difference between two frames, or all pixels
-        within some range of HSV values) into a masked copy of frame using
-        rectangular bounding boxes. Specifically, we do the following:
-
-            1) Convert to grayscale
-            2) Threshold
-            3) Dilate
-            4) Find contours
-            5) Find bounding boxes of those contours
-            6) Return masked copy of frame using those bounding boxes
-        """
-        if color is not None:
-            gray = cv2.cvtColor(frame, color)
-        else:  # sometimes we use an already-gray input
-            gray = frame.copy()
-        _, threshed = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
-
-        # Only dilate if some kernel size was given
-        if self.dilate is not None:
-            dilate_kernel = np.ones((self.dilate, self.dilate))
-            dilated = cv2.dilate(threshed, dilate_kernel)
-        else:
-            dilated = threshed
-
-        contours, hierarchy = cv2.findContours(
-            dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        mask = np.zeros(frame.shape, bool)  # Array of all False
-        for contour in contours:
-            if cv2.contourArea(contour) < self.min_area:
-                continue
-            # Instead of using the exact contours, draw their rectangular bounding boxes
-            x0, y0, w, h = cv2.boundingRect(contour)
-
-            x1 = x0 + w
-            y1 = y0 + h
-
-            x0 -= pad
-            y0 -= pad
-            x1 += pad
-            y1 += pad
-
-            mask[y0:y1, x0:x1] = True
-
-        return mask
-
-
+# Reading from config
 video_src = config("INPUT_FILEPATH")
-out_dir = config("OUTPUT_DIRECTORY")
+show = config("SHOW", default=True)
+write = config("WRITE", default=False)
+output_dir = config("OUTPUT_DIR", default="out")
+output_ext = config("OUTPUT_EXT", default=".avi")
+queue_size = config("QUEUE_SIZE", default=100)
+flush_thresh = config("FLUSH_THRESH", default=50)
+fourcc = config("FOURCC", default="XVID")
+frame_size = config("FRAME_SIZE", default=None)
+movement_kwargs = config("MOVEMENT_KWARGS")
+color_kwargs = config("COLOR_KWARGS")
+
 app = App(
     video_src=video_src,
-    out_dir=out_dir,
-    movement_pad=5,
-    movement_thresh=80,
-    dilate=None,
-    min_area=0,
-    downsample=1,
+    show=show,
+    write=write,
+    output_dir=output_dir,
+    output_ext=output_ext,
+    queue_size=queue_size,
+    flush_thresh=flush_thresh,
+    fourcc=fourcc,
+    frame_size=frame_size,
+    movement_kwargs=movement_kwargs,
+    color_kwargs=color_kwargs,
 )
-# app.start(write=True, show=False)
+app.start()
