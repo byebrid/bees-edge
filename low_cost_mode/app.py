@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple, Union
 import cv2
 import numpy as np
 from tqdm import tqdm
+from windows.color_window import ColorWindow
 from windows.window import Window
 from windows.movement_window import MovementWindow
 from windows.input_window import InputWindow
@@ -80,8 +81,11 @@ class App:
         self._movement_kwargs = movement_kwargs
         self._color_kwargs = color_kwargs
 
-        # Create video reader
-        self._reader = cv2.VideoCapture(filename=video_src)
+        # Create video reader either for file or camera input
+        if type(video_src) == str:
+            self._reader = cv2.VideoCapture(filename=video_src)
+        else: # assume int, cv2 will throw error for us anyway!
+            self._reader = cv2.VideoCapture(video_src)
         # Get video parameters
         self._fps = fps = self.get_video_prop(cv2.CAP_PROP_FPS)
         self._width = self.get_video_prop(cv2.CAP_PROP_FRAME_WIDTH)
@@ -113,8 +117,24 @@ class App:
             pad=movement_kwargs["PAD"],
             min_area=movement_kwargs["MIN_AREA"]
         )
+        self._color_window = ColorWindow(
+            HSV_dict=color_kwargs["HSV_DICT"],
+            show=show,
+            write=write,
+            output_ext=output_ext,
+            output_dir=output_dir,
+            queue_size=queue_size,
+            flush_thresh=flush_thresh,
+            fourcc=fourcc,
+            fps=fps,
+            frame_size=frame_size,
+            thresh=color_kwargs["THRESH"],
+            dilate=color_kwargs["DILATE"],
+            pad=color_kwargs["PAD"],
+            min_area=color_kwargs["MIN_AREA"]
+        )
 
-        self._windows = [self._input_win, self._movement_win] # type: List[Window]
+        self._windows = [self._input_win, self._movement_win, self._color_window] # type: List[Window]
 
         self.register_metadata(
             "video_src",
@@ -180,38 +200,6 @@ class App:
                     if self._write:
                         window.write()
 
-                # # Resize frame if required
-                # if self.downsample < 1:
-                #     frame = orig_frame.copy()
-                #     frame = cv2.resize(
-                #         frame, dsize=None, fx=self.downsample, fy=self.downsample
-                #     )
-                # else:
-                #     frame = orig_frame
-
-                # # Get mask based on color
-                # hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                # hsv_low = (self.low_H, self.low_S, self.low_V)
-                # hsv_high = (self.high_H, self.high_S, self.high_V)
-                # inrange = cv2.inRange(hsv, hsv_low, hsv_high)
-                # color_mask = self.get_mask(
-                #     inrange, thresh=self.color_thresh, pad=self.color_pad, color=None
-                # )
-
-                # # Figure out upsample ratio
-                # if self.downsample < 1:
-                #     upsample_x = int(width / frame.shape[1])
-                #     upsample_y = int(height / frame.shape[0])
-                #     diff_mask = diff_mask.repeat(upsample_x, axis=1).repeat(
-                #         upsample_y, axis=0
-                #     )
-                #     color_mask = color_mask.repeat(upsample_x, axis=1).repeat(
-                #         upsample_y, axis=0
-                #     )
-
-                # color_frame = np.zeros(orig_frame.shape, np.uint8)
-                # color_frame[color_mask] = orig_frame[color_mask]
-
                 # # Update trail frame too
                 # if trail_frame is None:
                 #     trail_frame = diff_frame.copy()
@@ -222,19 +210,6 @@ class App:
                 #     if not np.any(trail_updates, where=diff_mask):
                 #         trail_frame[diff_mask] = orig_frame[diff_mask]
                 #         trail_updates[diff_mask] = True
-
-                # # Copy normal frame so we can add frame number without messing up original frame
-                # if show:
-                #     i = self.current_frame_index
-                #     cv2.putText(
-                #         frame_copy,
-                #         f"Frame {i}/{total_frames}",
-                #         (50, 100),
-                #         self.FONT,
-                #         2,
-                #         (0, 0, 255),
-                #         3,
-                #     )
         finally:
             self.end_time = dt.now()
             self.total_time = self.end_time - self.start_time
@@ -245,10 +220,11 @@ class App:
             for window in self._windows:
                 window.release()
 
-            # TODO: Maybe just copy config.json, but append extra data like time taken, etc.?
-            meta_fp = out_sub_dir / "meta.json"
-            # print(f"Copying config.json to {meta_fp}")
-            self.save_metadata(fp=meta_fp)
+            if write:
+                # TODO: Maybe just copy config.json, but append extra data like time taken, etc.?
+                meta_fp = out_sub_dir / "meta.json"
+                # print(f"Copying config.json to {meta_fp}")
+                self.save_metadata(fp=meta_fp)
 
     def register_metadata(self, *keys):
         self._meta_keys = keys
@@ -295,19 +271,6 @@ class App:
     @lru_cache(maxsize=1)
     def total_frames(self) -> int:
         return self.get_video_prop(cv2.CAP_PROP_FRAME_COUNT)
-
-    @property
-    @lru_cache(maxsize=1)
-    def fps(self) -> int:
-        return self.get_video_prop(cv2.CAP_PROP_FPS)
-
-    @property
-    @lru_cache(maxsize=1)
-    def shape(self) -> Tuple[int, int]:
-        """Returns (width, height) of input video. Returns (-1, -1) if no video."""
-        width = self.get_video_prop(cv2.CAP_PROP_FRAME_WIDTH)
-        height = self.get_video_prop(cv2.CAP_PROP_FRAME_HEIGHT)
-        return width, height
 
 # Reading from config
 video_src = config("INPUT_FILEPATH")
