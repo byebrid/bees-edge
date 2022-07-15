@@ -89,102 +89,59 @@ class ThreadedVideo:
         # indicate that the thread should be stopped
         self.stopped = True
 
+class Window(ABC):
+    DEFAULT_FOURCC = "XVID"
+    DEFAULT_EXT = ".avi"
 
-class ThreadedVideoWriter:
-    def __init__(self, *args, queue_size=64, flush_thresh=32, **kwargs):
+    def __init__(self, *, name:str, show:bool=False, write:bool=False, output_dir:str=None, queue_size=100, flush_thresh=50, fourcc:int=None, fps:int=None, frame_size:Tuple[int, int]=None, **kwargs):
         """
-
-        Parameters
-        ----------
-        queue_size: int
-            Maximum number of frames we are allowed to store in this writer's 
-            queue.
-        flush_thresh: int
-            The number of frames we will allow in the queue before trying to
-            write to a file. This should be less than `queue_size`, 
+        ! You must use keyword arguments with this initialiser !
         """
-        # Just validate parameters
-        if flush_thresh >= queue_size:
-            raise ValueError(f"flush_thresh ({flush_thresh}) should be considerable less than queue_size {queue_size}!")
+        if write and output_dir is None:
+            raise ValueError("Can't write if no `output_dir` specified!")
+        if (show or write) and (frame_size is None or fps is None):
+            raise ValueError("Can't show or write if `frame_size` or `fps` is None!")
+        if fourcc is None:
+            print(f"No fourcc provided, assuming default '{self.DEFAULT_FOURCC}'")
+            fourcc = cv2.VideoWriter_fourcc(*self.DEFAULT_FOURCC)
+        
+        # Just storing all initial parameters
+        self._name = name
+        self._show = show
+        self._write = write
+        self._output_dir = output_dir
+        self._queue_size = queue_size
+        self._flush_thresh = flush_thresh
+        self._fourcc = fourcc
+        self._fps = fps
+        self._frame_size = frame_size
 
-        self.Q = Queue(maxsize=queue_size)
-        self.flush_thresh = flush_thresh
-        self.t = None # to keep track of current writing Thread
-        self.video = cv2.VideoWriter(*args, **kwargs)
-        self.dumping = False # to keep track of whether we are currently writing to file or not
+        # Creating cv2 window and/or Writer if needed
+        if show:
+            cv2.namedWindow(name)
+        if write:
+            output_file = Path(output_dir) / name
+            output_file = str(output_file.with_suffix(self.DEFAULT_EXT))
+            self._output_file = output_file
+            self._writer = ThreadedVideoWriter(queue_size=queue_size, flush_thresh=flush_thresh, filename=output_file, fourcc=fourcc, fps=fps, frameSize=frame_size)
 
-    def release(self):
-        """
-        Flushes final frames in queue to file, making sure to wait for previous
-        thread. 
+        self._frame = None
 
-        This is blocking, unlike the normal `write()`. 
-        """
-        # Dump remaining frames before closing thread
-        self.start_thread(wait=True, block=True)
+    def show(self):
+        cv2.imshow(self._name, self._frame)
 
-    def write(self, frame):
-        """
-        Meant to mimic `cv2.VideoWriter.write(image)`. This actually only adds
-        the given `frame` to a queue.
+    def write(self):
+        self._writer.write(self._frame)
 
-        If the queue size exceeds `flush_thresh`, then this will trigger a flush
-        of all frames in the queue into the file. See `start_thread()` for more
-        details.
-        """
-        self.Q.put(frame)
-        if self.Q.qsize() >= self.flush_thresh and not self.dumping:
-            self.start_thread()
-
-    def dump(self):
-        """
-        Writes all frames in queue to output file. Note if new frames are added
-        to queue in meantime, these will also be written, meaning we typically
-        write a few more than `flush_thresh` frames when we call this!
-        """
-        self.dumping = True
-
-        while not self.Q.empty():
-            frame = self.Q.get()
-            self.video.write(frame)
-
-        self.dumping = False
-        return
-
-    def thread_alive(self):
-        return self.t and self.t.is_alive()
-
-    def start_thread(self, wait=False, block=False):
-        """
-        This kicks off a new thread which starts writing all frames in the queue
-        to the output file.
-
-        Parameters
-        ----------
-        wait: bool
-            Set this to True if you are expecting there to be a previous thread 
-            still running. This might happen if you have finished going through
-            a video, but still need to flush a few more frames right after.
-            If False, then will raise a ValueError if a previous thread is already
-            running.
-        block: bool
-            Whether to make the new thread blocking or not. Useful if you need to
-            ensure this thread finishes before the main thread continues (i.e. at
-            the end of execution)/
-        """
-        if self.dumping:
-            if wait: # let old thread block main thread so it can finish before starting our next one.
-                self.t.join()
-            else:
-                raise ValueError("Tried to dump but previous thread was still running!")
-        self.t = Thread(target=self.dump)
-        self.t.start()
-
-        if block:
-            self.t.join()
+    @abstractmethod
+    def update(self):
+        pass
 
 
-class Display:
+
+
+
+class App:
     FONT = cv2.FONT_HERSHEY_SIMPLEX
 
     def __init__(self, *, video_src: str, out_dir: str, fourcc: int = None, min_area:int=10, dilate:int=3, movement_thresh:int=40, color_thresh:int=30, movement_pad:int=20, color_pad:int=5, downsample:float=1.0):
@@ -214,9 +171,6 @@ class Display:
         # This is lower bound (in ms) of delay opencv waits for keyentry.
         self.key_delay = 1
 
-        # Set up video writers
-        self.writers = []
-
         # Register the variables we want to save to a json file later. This makes sure
         # we don't forget how we got a particular output.        
         self.register_metadata(
@@ -230,8 +184,16 @@ class Display:
             "downsample",
             "fourcc"
         )
+
+
+        # Set up Windows?
+        self.input_win = Window(name="Input", show=show)
         
     def reset_HSV(self, *args):
+        """
+        Resets lower and upper bounds for HSV values such that colour thresholding
+        against them always leads to an all-black frame.
+        """
         self.low_H = 179
         self.low_S = 255
         self.low_V = 255
@@ -239,7 +201,7 @@ class Display:
         self.high_S = 0
         self.high_V = 0
 
-    def get_video_cap(self) -> ThreadedVideo:
+    def get_video_cap(self):
         return cv2.VideoCapture(filename=self.video_src)
         
     def show_color_picker():
@@ -256,7 +218,7 @@ class Display:
         pass
 
     @profile
-    def display_video(self, show=True, write=False):    
+    def start(self, show=True, write=False):    
         try:
             self.start_time = dt.now()
 
@@ -333,14 +295,14 @@ class Display:
 
                 # Get mask based on movement
                 diff = cv2.absdiff(frame, prev_frame)
-                diff_mask = self.soft_mask_to_bounding_boxes(diff, thresh=self.movement_thresh, pad=self.movement_pad)
+                diff_mask = self.get_mask(diff, thresh=self.movement_thresh, pad=self.movement_pad)
 
                 # Get mask based on color
                 hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
                 hsv_low = (self.low_H, self.low_S, self.low_V)
                 hsv_high = (self.high_H, self.high_S, self.high_V)
                 inrange = cv2.inRange(hsv, hsv_low, hsv_high)
-                color_mask = self.soft_mask_to_bounding_boxes(inrange, thresh=self.color_thresh, pad=self.color_pad, color=None)
+                color_mask = self.get_mask(inrange, thresh=self.color_thresh, pad=self.color_pad, color=None)
 
                 # Figure out upsample ratio
                 if self.downsample < 1:
@@ -454,14 +416,17 @@ class Display:
         return self.get_video_prop(cv2.CAP_PROP_POS_FRAMES)
 
     @property
+    @lru_cache(maxsize=1)
     def total_frames(self) -> int:
         return self.get_video_prop(cv2.CAP_PROP_FRAME_COUNT)
 
     @property
+    @lru_cache(maxsize=1)
     def fps(self) -> int:
         return self.get_video_prop(cv2.CAP_PROP_FPS)
 
     @property
+    @lru_cache(maxsize=1)
     def shape(self) -> Tuple[int, int]:
         """Returns (width, height) of input video. Returns (-1, -1) if no video."""
         width = self.get_video_prop(cv2.CAP_PROP_FRAME_WIDTH)
@@ -469,7 +434,7 @@ class Display:
         return width, height
 
     @profile
-    def soft_mask_to_bounding_boxes(self, frame:np.ndarray, thresh:int, pad: int, color=cv2.COLOR_BGR2GRAY):
+    def get_mask(self, frame:np.ndarray, thresh:int, pad: int, color=cv2.COLOR_BGR2GRAY):
         """
         Convert a 'soft mask' (e.g. difference between two frames, or all pixels
         within some range of HSV values) into a masked copy of frame using 
@@ -519,5 +484,5 @@ class Display:
 
 video_src = config("INPUT_FILEPATH")
 out_dir = config("OUTPUT_DIRECTORY")
-D = Display(video_src=video_src, out_dir=out_dir, movement_pad=5, movement_thresh=80, dilate=None, min_area=0, downsample=1)
-D.display_video(write=True, show=False)
+app = App(video_src=video_src, out_dir=out_dir, movement_pad=5, movement_thresh=80, dilate=None, min_area=0, downsample=1)
+# app.start(write=True, show=False)
