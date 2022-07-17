@@ -47,8 +47,8 @@ class App:
         video_src: str,
         output_dir: str,
         output_ext: str,
-        show: bool,
-        write: bool,
+        show: dict,
+        write: dict,
         queue_size: int,
         flush_thresh: int,
         fourcc: int,
@@ -56,19 +56,6 @@ class App:
         movement_kwargs: dict,
         color_kwargs:dict
     ):
-        # # Register the variables we want to save to a json file later. This makes sure
-        # # we don't forget how we got a particular output.
-        # self.register_metadata(
-        #     "video_src",
-        #     "min_area",
-        #     "movement_thresh",
-        #     "movement_pad",
-        #     "color_thresh",
-        #     "color_pad",
-        #     "dilate",
-        #     "downsample",
-        #     "fourcc",
-        # )
         self._video_src = video_src
         self._output_dir = output_dir
         self._output_ext = output_ext
@@ -153,11 +140,15 @@ class App:
     @profile
     def start(self):
         try:
-            self.start_time = dt.now()
+            self._start_time = dt.now()
+
+            # We just care if we're showing/writing _any_ Windows
+            write = any(self._write.values())
+            show = any(self._show.values())
 
             if write:
                 # Make output sub-directory just for this run
-                out_sub_dir = Path(self._output_dir) / str(self.start_time)
+                out_sub_dir = Path(self._output_dir) / str(self._start_time)
                 Path.mkdir(out_sub_dir)
 
                 # Make sure each window writes to this run's sub-directory
@@ -185,7 +176,6 @@ class App:
                     elif key != KEYS["none"]:
                         keyname = KEYCODE_TO_NAME.get(key, "unknown")
                         print(f"Keypress: {keyname}  (code={key})")
-                    
 
                 # Read next video frame, see if we've reached end
                 frame_grabbed, frame = self._reader.read()
@@ -194,11 +184,12 @@ class App:
 
                 for window in self._windows:
                     window.update(frame=frame)
-
-                    if self._show:
-                        window.show()
-                    if self._write:
-                        window.write()
+                    # Window only shows/writes if it was told to originally, else does nothing!
+                    # TODO: This might be confusing, maybe change it back to way it
+                    # was before? Small issue is I want to say, if window.getShow(), then window.show(),
+                    # but that's a little confusing, one show is attribute, other is method!
+                    window.show()
+                    window.write()
 
                 # # Update trail frame too
                 # if trail_frame is None:
@@ -211,9 +202,9 @@ class App:
                 #         trail_frame[diff_mask] = orig_frame[diff_mask]
                 #         trail_updates[diff_mask] = True
         finally:
-            self.end_time = dt.now()
-            self.total_time = self.end_time - self.start_time
-            print(f"Took {self.total_time.seconds} seconds")
+            self._end_time = dt.now()
+            self._total_time = self._end_time - self._start_time
+            print(f"Took {self._total_time.seconds} seconds")
 
             print("Releasing resources")
             self._reader.release()
@@ -243,8 +234,8 @@ class App:
         # put them in __init__() with the rest (which is possible, but feels wrong).
         meta_d.update(
             {
-                "time_taken": str(self.total_time),
-                "start_datetime": str(self.start_time),
+                "time_taken": str(self._total_time),
+                "start_datetime": str(self._start_time),
             }
         )
 
