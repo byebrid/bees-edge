@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple, Union
 import cv2
 import numpy as np
 from tqdm import tqdm
+from windows.trail_window import TrailWindow
 from windows.color_window import ColorWindow
 from windows.window import Window
 from windows.movement_window import MovementWindow
@@ -39,8 +40,6 @@ KEYCODE_TO_NAME = {v: k for k, v in KEYS.items()}
 
 
 class App:
-    FONT = cv2.FONT_HERSHEY_SIMPLEX
-
     def __init__(
         self,
         *,
@@ -104,7 +103,7 @@ class App:
             pad=movement_kwargs["PAD"],
             min_area=movement_kwargs["MIN_AREA"]
         )
-        self._color_window = ColorWindow(
+        self._color_win = ColorWindow(
             HSV_dict=color_kwargs["HSV_DICT"],
             show=show,
             write=write,
@@ -120,8 +119,20 @@ class App:
             pad=color_kwargs["PAD"],
             min_area=color_kwargs["MIN_AREA"]
         )
+        self._trail_win = TrailWindow(
+            show=show,
+            write=write,
+            output_ext=output_ext,
+            output_dir=output_dir,
+            queue_size=queue_size,
+            flush_thresh=flush_thresh,
+            fourcc=fourcc,
+            fps=fps,
+            frame_size=frame_size,
+            in_window=self._movement_win
+        )
 
-        self._windows = [self._input_win, self._movement_win, self._color_window] # type: List[Window]
+        self._windows = [self._input_win, self._movement_win, self._color_win, self._trail_win] # type: List[Window]
 
         self.register_metadata(
             "video_src",
@@ -183,7 +194,7 @@ class App:
                     break
 
                 for window in self._windows:
-                    window.update(frame=frame)
+                    window.update(frame=frame, index=self.current_frame_index)
                     # Window only shows/writes if it was told to originally, else does nothing!
                     # TODO: This might be confusing, maybe change it back to way it
                     # was before? Small issue is I want to say, if window.getShow(), then window.show(),
@@ -262,6 +273,7 @@ class App:
     @lru_cache(maxsize=1)
     def total_frames(self) -> int:
         return self.get_video_prop(cv2.CAP_PROP_FRAME_COUNT)
+
 
 # Reading from config
 video_src = config("INPUT_FILEPATH")

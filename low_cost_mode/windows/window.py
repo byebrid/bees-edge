@@ -10,6 +10,8 @@ from writer import ThreadedVideoWriter
 
 
 class Window(ABC):
+    FONT = cv2.FONT_HERSHEY_SIMPLEX
+
     def __init__(
         self,
         name: str,
@@ -21,6 +23,7 @@ class Window(ABC):
         fourcc: int,
         fps: int,
         frame_size: Tuple[int, int],
+        in_window = None, # If we want to use another Window's _frame as our starting frame when updating
         **kwargs,
     ):
         # Just storing all initial parameters
@@ -31,6 +34,7 @@ class Window(ABC):
         self._fourcc = cv2.VideoWriter_fourcc(*fourcc)
         self._fps = fps
         self._frame_size = frame_size
+        self._in_window = in_window
         # Bit weird, but we pass in the same dict of `write`, `show` to all Windows,
         # and they can just pick their own name out of it
         if self._name not in show:
@@ -44,7 +48,8 @@ class Window(ABC):
         if self._show:
             cv2.namedWindow(name)
         
-        self._frame = None
+        self._frame = None 
+        self._mask = None # In case we need to store a boolean mask
         self._output_file = None
         self._writer = None
 
@@ -78,7 +83,7 @@ class Window(ABC):
             self._writer.write(self._frame)
 
     @abstractmethod
-    def update(self, frame: np.ndarray):
+    def update(self, frame: np.ndarray, index: int):
         pass
 
     def release(self):

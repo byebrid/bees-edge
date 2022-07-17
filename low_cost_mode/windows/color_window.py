@@ -2,7 +2,7 @@ from typing import Tuple
 
 import cv2
 import numpy as np
-from utils import get_mask
+from utils import refine_mask
 
 from windows.window import Window
 
@@ -54,7 +54,7 @@ class ColorWindow(Window):
         self._high_S = HSV_dict["HIGH"]["S"]
         self._high_V = HSV_dict["HIGH"]["V"]
 
-    def update(self, frame: np.ndarray):
+    def update(self, frame: np.ndarray, index: int):
         # Convert original frame to HSV since color thresholding is more sensible
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
@@ -65,10 +65,14 @@ class ColorWindow(Window):
 
         # Get mask from colored pixels, and apply mask to original frame
         # Note that we pass in color=None, since we already have gray data
-        color_mask = get_mask(
-            inrange, thresh=self._thresh, pad=self._pad, min_area=self._min_area, color=None
+        color_frame = refine_mask(
+            frame=frame,
+            mask=inrange,
+            ret_mask=False,
+            thresh=self._thresh,
+            pad=self._pad,
+            min_area=self._min_area,
+            color=None,
         )
-        color_frame = np.zeros(frame.shape, np.uint8)
-        color_frame[color_mask] = frame[color_mask]
 
         self._frame = color_frame

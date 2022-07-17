@@ -1,5 +1,6 @@
 from typing import Tuple
 
+import cv2
 import numpy as np
 
 from windows.window import Window
@@ -13,5 +14,16 @@ class InputWindow(Window):
         
         super().__init__(name=name, show=show, write=write, output_ext=output_ext, queue_size=queue_size, flush_thresh=flush_thresh, fourcc=fourcc, fps=fps, frame_size=frame_size, **kwargs)
 
-    def update(self, frame: np.ndarray):
+    def update(self, frame: np.ndarray, index: int):
+        cv2.putText(
+            frame,
+            f"Frame {index}",
+            (50, 100),
+            self.FONT,
+            2,
+            (0, 0, 255),
+            3,
+        )
+
         self._frame = frame
+
