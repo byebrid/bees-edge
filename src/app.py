@@ -3,12 +3,10 @@ import string
 from datetime import datetime as dt
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import List, Tuple
 import shutil
 
 import cv2
-import numpy as np
-from tqdm import tqdm
 from windows.trail_window import TrailWindow
 from windows.color_window import ColorWindow
 from windows.window import Window
@@ -268,30 +266,31 @@ class App:
         return self.get_video_prop(cv2.CAP_PROP_FRAME_COUNT)
 
 
-# Reading from config
-video_src = config("INPUT_FILEPATH")
-show = config("SHOW", default=True)
-write = config("WRITE", default=False)
-output_dir = config("OUTPUT_DIR", default="out")
-output_ext = config("OUTPUT_EXT", default=".avi")
-queue_size = config("QUEUE_SIZE", default=100)
-flush_thresh = config("FLUSH_THRESH", default=50)
-fourcc = config("FOURCC", default="XVID")
-frame_size = config("FRAME_SIZE", default=None)
-movement_kwargs = config("MOVEMENT_KWARGS")
-color_kwargs = config("COLOR_KWARGS")
+if __name__ == "__main__":
+    # Reading from config
+    video_src = config("INPUT_FILEPATH")
+    show = config("SHOW", default=True)
+    write = config("WRITE", default=False)
+    output_dir = config("OUTPUT_DIR", default="out")
+    output_ext = config("OUTPUT_EXT", default=".avi")
+    queue_size = config("QUEUE_SIZE", default=100)
+    flush_thresh = config("FLUSH_THRESH", default=50)
+    fourcc = config("FOURCC", default="XVID")
+    frame_size = config("FRAME_SIZE", default=None)
+    movement_kwargs = config("MOVEMENT_KWARGS")
+    color_kwargs = config("COLOR_KWARGS")
 
-app = App(
-    video_src=video_src,
-    show=show,
-    write=write,
-    output_dir=output_dir,
-    output_ext=output_ext,
-    queue_size=queue_size,
-    flush_thresh=flush_thresh,
-    fourcc=fourcc,
-    frame_size=frame_size,
-    movement_kwargs=movement_kwargs,
-    color_kwargs=color_kwargs,
-)
-app.start()
+    app = App(
+        video_src=video_src,
+        show=show,
+        write=write,
+        output_dir=output_dir,
+        output_ext=output_ext,
+        queue_size=queue_size,
+        flush_thresh=flush_thresh,
+        fourcc=fourcc,
+        frame_size=frame_size,
+        movement_kwargs=movement_kwargs,
+        color_kwargs=color_kwargs,
+    )
+    app.start()
