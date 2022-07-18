@@ -4,6 +4,7 @@ from datetime import datetime as dt
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Tuple, Union
+import shutil
 
 import cv2
 import numpy as np
@@ -21,7 +22,15 @@ if type(__builtins__) is not dict or "profile" not in __builtins__:
 
 def config(key, default=None):
     """Helper method to return value of `key` in `config.json`, else returns `default`"""
-    with open("eg_config.json", "r") as f:
+    # Get filepaths of true config, and example config files
+    config_fp = Path("config.json")
+    eg_config_fp = Path("eg_config.json")
+
+    if not config_fp.exists():
+        print(f"{config_fp} doesn't exist! Copying {eg_config_fp} to fix this. Edit {config_fp} in the future to adjust parameters")
+        shutil.copy(eg_config_fp, config_fp)
+
+    with open("config.json", "r") as f:
         d = json.load(f)
     return d.get(key, default)
 

@@ -2,6 +2,8 @@
 .envrc
 
 out
+# Note this doesn't ignore the example eg_config.json file provided!
+config.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
