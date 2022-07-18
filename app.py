@@ -21,7 +21,7 @@ if type(__builtins__) is not dict or "profile" not in __builtins__:
 
 def config(key, default=None):
     """Helper method to return value of `key` in `config.json`, else returns `default`"""
-    with open("low_cost_mode/my_config.json", "r") as f:
+    with open("eg_config.json", "r") as f:
         d = json.load(f)
     return d.get(key, default)
 
@@ -160,7 +160,7 @@ class App:
             if write:
                 # Make output sub-directory just for this run
                 out_sub_dir = Path(self._output_dir) / str(self._start_time)
-                Path.mkdir(out_sub_dir)
+                Path.mkdir(out_sub_dir, parents=True)
 
                 # Make sure each window writes to this run's sub-directory
                 for window in self._windows:

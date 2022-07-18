@@ -1,0 +1,43 @@
+{
+    "INPUT_FILEPATH": 2,
+    "SHOW": {
+        "Input": true,
+        "Movement": true,
+        "Color": true
+    },
+    "WRITE": {
+        "Input": false,
+        "Movement": true,
+        "Color": false
+    },
+    "OUTPUT_DIR": "out",
+    "OUTPUT_EXT": ".avi",
+    "QUEUE_SIZE": 200,
+    "FLUSH_THRESH": 50,
+    "FOURCC": "XVID",
+    "FRAME_SIZE": null,
+    "MOVEMENT_KWARGS": {
+        "THRESH": 40,
+        "PAD": 10,
+        "DILATE": null,
+        "MIN_AREA": 5
+    },
+    "COLOR_KWARGS": {
+        "THRESH": 60,
+        "PAD": 0,
+        "DILATE": null,
+        "MIN_AREA": 0,
+        "HSV_DICT": {
+            "LOW": {
+                "H": 25,
+                "S": 0,
+                "V": 0
+            },
+            "HIGH": {
+                "H": 35,
+                "S": 255,
+                "V": 255
+            }
+        }
+    }
+}
