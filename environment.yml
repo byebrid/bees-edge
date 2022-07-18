@@ -1,0 +1,15 @@
+name: bees-edge
+channels:
+  - conda-forge
+dependencies:
+  - tensorflow-gpu>=2.3
+  - opencv
+  - lxml
+  - tqdm
+  - absl-py
+  - matplotlib
+  - easydict
+  - pillow
+  - pytesseract
+  - pandas
+  - pip
