@@ -7,6 +7,7 @@ from typing import List, Tuple
 import shutil
 
 import cv2
+from reader import ThreadedVideo
 from windows.trail_window import TrailWindow
 from windows.color_window import ColorWindow
 from windows.window import Window
@@ -76,9 +77,11 @@ class App:
 
         # Create video reader either for file or camera input
         if type(video_src) == str:
-            self._reader = cv2.VideoCapture(filename=video_src)
+            # self._reader = cv2.VideoCapture(filename=video_src)
+            self._reader = ThreadedVideo(source=video_src)
         else: # assume int, cv2 will throw error for us anyway!
-            self._reader = cv2.VideoCapture(video_src)
+            self._reader = ThreadedVideo(source=video_src)
+            # self._reader = cv2.VideoCapture(video_src)
         # Get video parameters
         self._fps = fps = self.get_video_prop(cv2.CAP_PROP_FPS)
         self._width = self.get_video_prop(cv2.CAP_PROP_FRAME_WIDTH)
@@ -174,6 +177,9 @@ class App:
                 for window in self._windows:
                     window.prepare_writer(output_dir=out_sub_dir)
 
+            # Start reading from camera/video file
+            self._reader.start()
+
             # Play video, with all processing
             while True:
                 if self.current_frame_index % 1000 == 0:
@@ -208,12 +214,14 @@ class App:
             self._total_time = self._end_time - self._start_time
             print(f"Took {self._total_time.seconds} seconds")
 
-            print("Releasing resources")
+            print("Releasing camera/input file")
             self._reader.release()
+            print("Releasing any output files, closing any windows")
             for window in self._windows:
                 window.release()
 
             if write:
+                print("Saving metadata to this run")
                 # TODO: Maybe just copy config.json, but append extra data like time taken, etc.?
                 meta_fp = out_sub_dir / "meta.json"
                 # print(f"Copying config.json to {meta_fp}")
