@@ -78,7 +78,8 @@ class App:
         self._height = self.get_video_prop(cv2.CAP_PROP_FRAME_HEIGHT)
         frame_size = (self._width, self._height)
 
-        # Set up Windows?
+        # Set up Windows. When adding Window, make sure to also append it to
+        # self._windows below!
         self._input_win = InputWindow(
             show=show,
             write=write,
@@ -166,12 +167,6 @@ class App:
                 for window in self._windows:
                     window.prepare_writer(output_dir=out_sub_dir)
 
-            # # Trail frame is a cumulative frame of all movement detection frames.
-            # trail_frame = None
-            # # This is to help keep track of which pixels have already been set in trail frame. Doing this to try and get more bees
-            # # rather than flowers in final image!
-            # trail_updates = None
-
             # Play video, with all processing
             while True:
                 if self.current_frame_index % 1000 == 0:
@@ -201,17 +196,6 @@ class App:
                     # but that's a little confusing, one show is attribute, other is method!
                     window.show()
                     window.write()
-
-                # # Update trail frame too
-                # if trail_frame is None:
-                #     trail_frame = diff_frame.copy()
-                #     trail_updates = np.zeros(trail_frame.shape, dtype=bool)
-                #     trail_updates[diff_mask] = True
-                # else:
-                #     # Double-check that none of these pixels have been updated before
-                #     if not np.any(trail_updates, where=diff_mask):
-                #         trail_frame[diff_mask] = orig_frame[diff_mask]
-                #         trail_updates[diff_mask] = True
         finally:
             self._end_time = dt.now()
             self._total_time = self._end_time - self._start_time

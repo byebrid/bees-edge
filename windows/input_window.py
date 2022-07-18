@@ -15,12 +15,13 @@ class InputWindow(Window):
         super().__init__(name=name, show=show, write=write, output_ext=output_ext, queue_size=queue_size, flush_thresh=flush_thresh, fourcc=fourcc, fps=fps, frame_size=frame_size, **kwargs)
 
     def update(self, frame: np.ndarray, index: int):
+        frame = frame.copy()
         cv2.putText(
             frame,
             f"Frame {index}",
             (50, 100),
             self.FONT,
-            2,
+            1,
             (0, 0, 255),
             3,
         )

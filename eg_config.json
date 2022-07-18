@@ -3,12 +3,14 @@
     "SHOW": {
         "Input": true,
         "Movement": true,
-        "Color": true
+        "Color": true,
+        "Trail": true
     },
     "WRITE": {
         "Input": false,
         "Movement": true,
-        "Color": false
+        "Color": false,
+        "Trail": false
     },
     "OUTPUT_DIR": "out",
     "OUTPUT_EXT": ".avi",
