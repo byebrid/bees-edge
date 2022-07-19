@@ -181,8 +181,9 @@ class App:
             self._reader.start()
 
             # Play video, with all processing
+            i = 1
             while True:
-                if self.current_frame_index % 1000 == 0:
+                if i % 1000 == 0:
                     print(f"Frame {self.current_frame_index}/{self.total_frames}")
 
                 if show:
@@ -202,13 +203,15 @@ class App:
                     break
 
                 for window in self._windows:
-                    window.update(frame=frame, index=self.current_frame_index)
+                    window.update(frame=frame, index=i)
                     # Window only shows/writes if it was told to originally, else does nothing!
                     # TODO: This might be confusing, maybe change it back to way it
                     # was before? Small issue is I want to say, if window.getShow(), then window.show(),
                     # but that's a little confusing, one show is attribute, other is method!
                     window.show()
                     window.write()
+                
+                i += 1
         finally:
             self._end_time = dt.now()
             self._total_time = self._end_time - self._start_time

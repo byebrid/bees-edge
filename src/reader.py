@@ -1,5 +1,5 @@
 from multiprocessing.sharedctypes import Value
-from queue import Queue
+from queue import Empty, Queue
 from threading import Thread
 from typing import Union
 
@@ -31,7 +31,7 @@ class ThreadedVideo:
     def start(self):
         # start a thread to read frames from the file video stream
         self.t = Thread(target=self.update)
-        self.t.daemon = True
+        # self.t.daemon = True
         self.t.start()
         return self
 
@@ -48,13 +48,19 @@ class ThreadedVideo:
                 grabbed, frame = self.stream.read()
                 
                 if not grabbed:
-                    self.stop()
+                    print("Reader is releasing itself!")
+                    self.release()
                     return
                 
                 self.Q.put(frame)
 
     def read(self):
-        return True, self.Q.get()
+        try:
+            print(self.Q.qsize())
+            return True, self.Q.get(timeout=10) # TODO: Think of more robust way of
+        except Empty:
+            return False, None
+        
 
     def more(self):
         return self.Q.qsize() > 0
@@ -64,4 +70,4 @@ class ThreadedVideo:
         # it exits cleanly
         self.stopped = True
         # Make sure we let that thread finish before we terminate everything!
-        self.t.join()
+        # self.t.join()

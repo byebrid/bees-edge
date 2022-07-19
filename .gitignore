@@ -2,6 +2,7 @@
 .envrc
 
 out
+data
 # Note this doesn't ignore the example eg_config.json file provided!
 config.json
 

@@ -46,7 +46,7 @@ class Window(ABC):
 
         # Creating cv2 window and/or Writer if needed
         if self._show:
-            cv2.namedWindow(name)
+            cv2.namedWindow(name, cv2.WINDOW_NORMAL)
         
         self._frame = None 
         self._mask = None # In case we need to store a boolean mask
