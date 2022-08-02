@@ -5,6 +5,8 @@ from typing import Union
 
 import cv2
 
+from pi_stream import PiVideoCapture
+
 
 class ThreadedVideo:
     """
@@ -15,8 +17,13 @@ class ThreadedVideo:
     """
 
     def __init__(self, source: Union[str, int], queue_size:int=512):
+        self.source = source
+        self.queue_size = queue_size
+
         # Check if reading from live camera or video file
-        if type(source) == str:
+        if source == "pi":
+            self.stream = PiVideoCapture()
+        elif type(source) == str:
             self.stream = cv2.VideoCapture(filename=source)
         elif type(source) == int:
             self.stream = cv2.VideoCapture(index=source)
@@ -36,7 +43,10 @@ class ThreadedVideo:
         return self
 
     def get(self, key):
-        return self.stream.get(key)
+        try:
+            return self.stream.get(key)
+        except:
+            return -1
 
     def update(self):
         while True:
@@ -50,13 +60,11 @@ class ThreadedVideo:
                 if not grabbed:
                     print("Reader is releasing itself!")
                     self.release()
-                    return
                 
                 self.Q.put(frame)
 
     def read(self):
         try:
-            print(self.Q.qsize())
             return True, self.Q.get(timeout=10) # TODO: Think of more robust way of
         except Empty:
             return False, None
@@ -69,5 +77,6 @@ class ThreadedVideo:
         # Set this attribute and let the actual thread stop itself to make sure 
         # it exits cleanly
         self.stopped = True
-        # Make sure we let that thread finish before we terminate everything!
-        # self.t.join()
+
+    def __repr__(self) -> str:
+        return f"<Reader: source=${self.s}>"

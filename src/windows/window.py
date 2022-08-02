@@ -63,7 +63,7 @@ class Window(ABC):
             print(f"{str(self)} ignoring instruction to prepare writer, since self._write is False")
             return
 
-        output_file = Path(output_dir) / self._name
+        output_file = Path(output_dir) / f"{self._name}001"
         output_file = str(output_file.with_suffix(self._output_ext))
         self._output_file = output_file
 

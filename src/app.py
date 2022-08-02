@@ -87,6 +87,7 @@ class App:
         self._width = self.get_video_prop(cv2.CAP_PROP_FRAME_WIDTH)
         self._height = self.get_video_prop(cv2.CAP_PROP_FRAME_HEIGHT)
         frame_size = (self._width, self._height)
+        print(f"fps = {self._fps}; frame_size={frame_size}")
 
         # Set up Windows. When adding Window, make sure to also append it to
         # self._windows below!
@@ -114,22 +115,22 @@ class App:
             pad=movement_kwargs["PAD"],
             min_area=movement_kwargs["MIN_AREA"]
         )
-        self._color_win = ColorWindow(
-            HSV_dict=color_kwargs["HSV_DICT"],
-            show=show,
-            write=write,
-            output_ext=output_ext,
-            output_dir=output_dir,
-            queue_size=queue_size,
-            flush_thresh=flush_thresh,
-            fourcc=fourcc,
-            fps=fps,
-            frame_size=frame_size,
-            thresh=color_kwargs["THRESH"],
-            dilate=color_kwargs["DILATE"],
-            pad=color_kwargs["PAD"],
-            min_area=color_kwargs["MIN_AREA"]
-        )
+        # self._color_win = ColorWindow(
+        #     HSV_dict=color_kwargs["HSV_DICT"],
+        #     show=show,
+        #     write=write,
+        #     output_ext=output_ext,
+        #     output_dir=output_dir,
+        #     queue_size=queue_size,
+        #     flush_thresh=flush_thresh,
+        #     fourcc=fourcc,
+        #     fps=fps,
+        #     frame_size=frame_size,
+        #     thresh=color_kwargs["THRESH"],
+        #     dilate=color_kwargs["DILATE"],
+        #     pad=color_kwargs["PAD"],
+        #     min_area=color_kwargs["MIN_AREA"]
+        # )
         self._trail_win = TrailWindow(
             show=show,
             write=write,
@@ -143,7 +144,8 @@ class App:
             in_window=self._movement_win
         )
 
-        self._windows = [self._input_win, self._movement_win, self._color_win, self._trail_win] # type: List[Window]
+        self._windows = [self._input_win, self._movement_win, self._trail_win] # type: List[Window]
+        # self._windows = [self._input_win, self._movement_win, self._color_win, self._trail_win] # type: List[Window]
 
         self.register_metadata(
             "video_src",
@@ -184,7 +186,7 @@ class App:
             i = 1
             while True:
                 if i % 1000 == 0:
-                    print(f"Frame {self.current_frame_index}/{self.total_frames}")
+                    print(f"Frame {i}/{self.total_frames}")
 
                 if show:
                     # Check to see if user presses key
