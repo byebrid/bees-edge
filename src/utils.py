@@ -90,3 +90,15 @@ def refine_mask(frame:np.ndarray, mask: np.ndarray, ret_mask: bool, thresh: int,
             ret[y0:y1, x0:x1] = frame[y0:y1, x0:x1]
     
     return ret
+
+
+
+def refine_mask_with_blur(frame, mask):
+    gray = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    _, threshed = cv2.threshold(src=gray, thresh=40, maxval=255, type=cv2.THRESH_BINARY)
+    blurred_mask = cv2.dilate(threshed, kernel=np.ones((63, 63)))
+    return blurred_mask
+    
+    # blurred_mask = cv2.GaussianBlur(src=gray, ksize=(63, 63), sigmaX=0)
+    # _, threshed = cv2.threshold(src=blurred_mask, thresh=40, maxval=255, type=cv2.THRESH_BINARY)
+    # return threshed

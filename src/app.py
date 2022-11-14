@@ -88,7 +88,8 @@ class App:
 
         # Set up Windows. When adding Window, make sure to also append it to
         # self._windows below!
-        self._input_win = InputWindow(
+        self._windows = []
+        self._windows.append(InputWindow(
             show=show,
             write=write,
             output_ext=output_ext,
@@ -97,8 +98,8 @@ class App:
             fourcc=fourcc,
             fps=fps,
             frame_size=frame_size
-        )
-        self._movement_win = MovementWindow(
+        ))
+        self._windows.append(MovementWindow(
             show=show,
             write=write,
             output_ext=output_ext,
@@ -111,8 +112,8 @@ class App:
             dilate=movement_kwargs["DILATE"],
             pad=movement_kwargs["PAD"],
             min_area=movement_kwargs["MIN_AREA"]
-        )
-        # self._color_win = ColorWindow(
+        ))
+        # self._windows.append(ColorWindow(
         #     HSV_dict=color_kwargs["HSV_DICT"],
         #     show=show,
         #     write=write,
@@ -127,22 +128,20 @@ class App:
         #     dilate=color_kwargs["DILATE"],
         #     pad=color_kwargs["PAD"],
         #     min_area=color_kwargs["MIN_AREA"]
-        # )
-        self._trail_win = TrailWindow(
-            show=show,
-            write=write,
-            output_ext=output_ext,
-            output_dir=output_dir,
-            queue_size=queue_size,
-            flush_thresh=flush_thresh,
-            fourcc=fourcc,
-            fps=fps,
-            frame_size=frame_size,
-            in_window=self._movement_win
-        )
+        # ))
+        # self._windows.append(TrailWindow(
+        #     show=show,
+        #     write=write,
+        #     output_ext=output_ext,
+        #     output_dir=output_dir,
+        #     queue_size=queue_size,
+        #     flush_thresh=flush_thresh,
+        #     fourcc=fourcc,
+        #     fps=fps,
+        #     frame_size=frame_size,
+        #     in_window=self._movement_win
+        # ))
 
-        self._windows = [self._input_win, self._movement_win, self._trail_win] # type: List[Window]
-        # self._windows = [self._input_win, self._movement_win, self._color_win, self._trail_win] # type: List[Window]
 
         self.register_metadata(
             "video_src",
@@ -169,6 +168,8 @@ class App:
             # We just care if we're showing/writing _any_ Windows
             write = any(self._write.values())
             show = any(self._show.values())
+            print(f"Writing to any files: {'Yes' if write else 'No'}")
+            print(f"Showing any windows: {'Yes' if show else 'No'}")
 
             if write:
                 # Make output sub-directory just for this run
@@ -187,10 +188,17 @@ class App:
             while True:
                 # Show average FPS
                 fps.tick()
-                print(f"Average FPS: {fps.get_average() if fps.get_average() is not None else -1:.2f}")
+
+                if i % 100 == 0:
+                    print(f"Average FPS: {fps.get_average() if fps.get_average() is not None else -1:.2f}")
+                    # Show queue size for debugging purposes
+                    print(f"Frames currently in input/reading queue: {self._reader.Q.qsize()}")
 
                 if i % 1000 == 0:
                     print(f"Frame {i}/{self.total_frames}")
+                    
+                    # TODO: Remove this!
+                    break
 
                 if show:
                     # Check to see if user presses key
@@ -199,6 +207,8 @@ class App:
                     if key == KEYS["q"]:
                         print("User pressed 'q', exiting...")
                         break
+                    elif key == KEYS["space"]:
+                        input("Enter to continue")
                     elif key != KEYS["none"]:
                         keyname = KEYCODE_TO_NAME.get(key, "unknown")
                         print(f"Keypress: {keyname}  (code={key})")
@@ -218,9 +228,7 @@ class App:
                     window.write()
 
                 i += 1
-
-                # Show queue size for debugging purposes
-                print(f"Frames currently in input/reading queue: {self._reader.Q.qsize()}")
+                
         finally:
             self._end_time = dt.now()
             self._total_time = self._end_time - self._start_time
