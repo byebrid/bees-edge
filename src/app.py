@@ -13,6 +13,7 @@ from windows.color_window import ColorWindow
 from windows.window import Window
 from windows.movement_window import MovementWindow
 from windows.input_window import InputWindow
+from fps import FPS
 
 # Just to deal with @profile decorator from line_profiler. It's a weird system but whatever
 if type(__builtins__) is not dict or "profile" not in __builtins__:
@@ -74,14 +75,10 @@ class App:
         self._frame_size = frame_size
         self._movement_kwargs = movement_kwargs
         self._color_kwargs = color_kwargs
-
+        
         # Create video reader either for file or camera input
-        if type(video_src) == str:
-            # self._reader = cv2.VideoCapture(filename=video_src)
-            self._reader = ThreadedVideo(source=video_src)
-        else: # assume int, cv2 will throw error for us anyway!
-            self._reader = ThreadedVideo(source=video_src)
-            # self._reader = cv2.VideoCapture(video_src)
+        self._reader = ThreadedVideo(source=video_src)
+        
         # Get video parameters
         self._fps = fps = self.get_video_prop(cv2.CAP_PROP_FPS)
         self._width = self.get_video_prop(cv2.CAP_PROP_FRAME_WIDTH)
@@ -163,9 +160,12 @@ class App:
 
     @profile
     def start(self):
-        try:
-            self._start_time = dt.now()
+        self._start_time = dt.now()
+        
+        # This lets us get average FPS for last 32 frames
+        fps = FPS(size=32)
 
+        try:
             # We just care if we're showing/writing _any_ Windows
             write = any(self._write.values())
             show = any(self._show.values())
@@ -185,6 +185,10 @@ class App:
             # Play video, with all processing
             i = 1
             while True:
+                # Show average FPS
+                fps.tick()
+                print(f"Average FPS: {fps.get_average() if fps.get_average() is not None else -1:.2f}")
+
                 if i % 1000 == 0:
                     print(f"Frame {i}/{self.total_frames}")
 
@@ -212,8 +216,11 @@ class App:
                     # but that's a little confusing, one show is attribute, other is method!
                     window.show()
                     window.write()
-                
+
                 i += 1
+
+                # Show queue size for debugging purposes
+                print(f"Frames currently in input/reading queue: {self._reader.Q.qsize()}")
         finally:
             self._end_time = dt.now()
             self._total_time = self._end_time - self._start_time
