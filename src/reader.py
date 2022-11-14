@@ -18,10 +18,7 @@ class ThreadedVideo:
         self.queue_size = queue_size
 
         # Check if reading from live camera or video file
-        if source == "pi":
-            from pi_stream import PiVideoCapture
-            self.stream = PiVideoCapture()
-        elif type(source) == str:
+        if type(source) == str:
             self.stream = cv2.VideoCapture(filename=source)
         elif type(source) == int:
             self.stream = cv2.VideoCapture(index=source)
