@@ -89,27 +89,4 @@ def refine_mask(frame:np.ndarray, mask: np.ndarray, ret_mask: bool, thresh: int,
             # add up!
             ret[y0:y1, x0:x1] = frame[y0:y1, x0:x1]
     
-    # for contour in contours:
-    #     if cv2.contourArea(contour) < min_area:
-    #         continue
-    #     # Instead of using the exact contours, draw their rectangular bounding boxes
-    #     x0, y0, w, h = cv2.boundingRect(contour)
-
-    #     x1 = x0 + w
-    #     y1 = y0 + h
-
-    #     x0 -= pad
-    #     y0 -= pad
-    #     x1 += pad
-    #     y1 += pad
-
-    #     # TODO: Test how much faster it is if we literally copy-paste this for
-    #     # loop into the single if-else statement above for mask vs frame. We're
-    #     # doing an if statement for every contour, which isn't terrible but could
-    #     # add up!
-    #     if ret_mask:
-    #         ret[y0:y1, x0:x1] = True
-    #     else:
-    #         ret[y0:y1, x0:x1] = frame[y0:y1, x0:x1]
-
     return ret

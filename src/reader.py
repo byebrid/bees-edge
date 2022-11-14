@@ -1,11 +1,8 @@
-from multiprocessing.sharedctypes import Value
 from queue import Empty, Queue
 from threading import Thread
 from typing import Union
 
 import cv2
-
-from pi_stream import PiVideoCapture
 
 
 class ThreadedVideo:
@@ -22,6 +19,7 @@ class ThreadedVideo:
 
         # Check if reading from live camera or video file
         if source == "pi":
+            from pi_stream import PiVideoCapture
             self.stream = PiVideoCapture()
         elif type(source) == str:
             self.stream = cv2.VideoCapture(filename=source)
@@ -31,11 +29,13 @@ class ThreadedVideo:
             raise ValueError(f"Expected `source` to be string or int, but got {type(source)}")
         
         self.stopped = False
-
         self.Q = Queue(maxsize=queue_size)
         self.t = None  # To keep track of this Thread
 
     def start(self):
+        if self.t is not None:
+            raise RuntimeError("ThreadedVideo.start() was called more than once")
+
         # start a thread to read frames from the file video stream
         self.t = Thread(target=self.update)
         # self.t.daemon = True
