@@ -1,7 +1,17 @@
 import numpy as np
 import cv2
 
-def refine_mask(frame:np.ndarray, mask: np.ndarray, ret_mask: bool, thresh: int, pad: int, color=cv2.COLOR_BGR2GRAY, dilate:int=None, min_area:int=0):
+
+def refine_mask(
+    frame: np.ndarray,
+    mask: np.ndarray,
+    ret_mask: bool,
+    thresh: int,
+    pad: int,
+    color=cv2.COLOR_BGR2GRAY,
+    dilate: int = None,
+    min_area: int = 0,
+):
     """
     Convert a 'soft mask' (e.g. difference between two frames, or all pixels
     within some range of HSV values) into a masked copy of frame using
@@ -21,9 +31,9 @@ def refine_mask(frame:np.ndarray, mask: np.ndarray, ret_mask: bool, thresh: int,
     mask: numpy.ndarray
         The pre-processed frame which we'll treat as the rough mask to smoothen out.
     ret_mask: bool
-        Whether to return a mask or not. If False, then we return a masked copy 
+        Whether to return a mask or not. If False, then we return a masked copy
         of the original frame. If True, we return a True/False mask array. If you
-        only want a masked version of the input frame, and don't need the mask 
+        only want a masked version of the input frame, and don't need the mask
         for anything else, setting this to False will be faster!
     TODO: rest of parameters!
     """
@@ -88,17 +98,36 @@ def refine_mask(frame:np.ndarray, mask: np.ndarray, ret_mask: bool, thresh: int,
             # doing an if statement for every contour, which isn't terrible but could
             # add up!
             ret[y0:y1, x0:x1] = frame[y0:y1, x0:x1]
-    
+
     return ret
 
 
+def detect_motion(
+    frame: np.ndarray, prev_frame: np.ndarray, thresh: int = 40, kernel_size: int = 63
+) -> np.ndarray:
+    """
+    Returns a mask for the given `frame` that tries to include only the "moving"
+    objects in the image.
 
-def refine_mask_with_blur(frame, mask):
-    gray = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-    _, threshed = cv2.threshold(src=gray, thresh=40, maxval=255, type=cv2.THRESH_BINARY)
-    blurred_mask = cv2.dilate(threshed, kernel=np.ones((63, 63)))
-    return blurred_mask
-    
-    # blurred_mask = cv2.GaussianBlur(src=gray, ksize=(63, 63), sigmaX=0)
-    # _, threshed = cv2.threshold(src=blurred_mask, thresh=40, maxval=255, type=cv2.THRESH_BINARY)
-    # return threshed
+    :param frame: Current frame of video
+    :param prev_frame: Previous frame of video
+    :param thresh: Minimum threshold to define what is and is not "movement" , defaults to 40
+    :param kernel_size: Width/height of kernel used to dilate the mask (provides a more filled-in image of each moving object), defaults to 63
+    :return: A mask array (i.e. boolean) that can be used to index the given `frame` to only pull out the "moving" parts of the frame
+    """
+    # Compute pixel difference between consecutive frames (note this still has 3 channels)
+    diff = cv2.absdiff(frame, prev_frame)
+    # Convert to grayscale
+    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    # Cut off pixels that did not have "enough" movement. This is now a 2D array
+    # of just 1s and 0s
+    _, threshed = cv2.threshold(
+        src=gray, thresh=thresh, maxval=255, type=cv2.THRESH_BINARY
+    )
+    # Since we now have a very choppy/pixelly mask, we want to blur it out a bit.
+    # This mimics finding the bounding boxes of bees (or whatever objects are
+    # moving), but does so in a much cheaper/faster way!
+    dilated_mask = cv2.dilate(threshed, kernel=np.ones((kernel_size, kernel_size)))
+    # Convert to boolean so we can actually use it as a mask now
+    dilated_mask = dilated_mask.astype(bool)
+    return dilated_mask

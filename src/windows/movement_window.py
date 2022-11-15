@@ -2,7 +2,7 @@ from typing import Tuple
 from windows.window import Window
 import cv2
 import numpy as np
-from utils import refine_mask, refine_mask_with_blur
+from utils import refine_mask, detect_motion
 
 
 class MovementWindow(Window):
@@ -52,26 +52,11 @@ class MovementWindow(Window):
             self._prev_frame = frame
 
         # Get mask based on movement
-        diff = cv2.absdiff(frame, self._prev_frame)
-        # TODO: Let get_mask receive the original frame so it can just apply the
-        # mask without needing to create a separate mask array!
-        # diff_mask = refine_mask(
-        #     frame=frame,
-        #     mask=diff,
-        #     ret_mask=True,
-        #     thresh=self._thresh,
-        #     dilate=self._dilate,
-        #     pad=self._pad,
-        #     min_area=self._min_area,
-        # )
-        diff_mask = refine_mask_with_blur(frame=frame, mask=diff)
-        diff_mask = diff_mask.astype(bool)
+        motion_mask = detect_motion(frame=frame, prev_frame=self._prev_frame)
+        # Create copy of original frame that only includes moving parts
         diff_frame = np.zeros(frame.shape, dtype=np.uint8)
-        diff_frame[diff_mask] = frame[diff_mask]
-
-        # diff_mask = np.ones(frame.shape, dtype=bool)
-        # diff_frame = frame[diff_mask]
+        diff_frame[motion_mask] = frame[motion_mask]
 
         self._prev_frame = frame
         self._frame = diff_frame
-        self._mask = diff_mask
+        self._mask = motion_mask
