@@ -53,6 +53,8 @@ class App:
         self,
         *,
         video_src: str,
+        input_width: int,
+        input_height: int,
         output_dir: str,
         output_ext: str,
         show: dict,
@@ -65,6 +67,8 @@ class App:
         color_kwargs:dict
     ):
         self._video_src = video_src
+        self._input_width = input_width
+        self._input_height = input_height
         self._output_dir = output_dir
         self._output_ext = output_ext
         self._show = show
@@ -77,7 +81,13 @@ class App:
         self._color_kwargs = color_kwargs
         
         # Create video reader either for file or camera input
-        self._reader = ThreadedVideo(source=video_src)
+        self._reader = ThreadedVideo(source=video_src, queue_size=1024)
+
+        # Override default resolution if specified
+        if self._input_width is not None and self._input_height is not None:
+            print(f"Manually setting input resolution to {self._input_width}x{self._input_height}")
+            self._reader.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, self._input_height)
+            self._reader.stream.set(cv2.CAP_PROP_FRAME_WIDTH, self._input_width)
         
         # Get video parameters
         self._fps = fps = self.get_video_prop(cv2.CAP_PROP_FPS)
@@ -89,59 +99,63 @@ class App:
         # Set up Windows. When adding Window, make sure to also append it to
         # self._windows below!
         self._windows = []
-        self._windows.append(InputWindow(
-            show=show,
-            write=write,
-            output_ext=output_ext,
-            queue_size=queue_size,
-            flush_thresh=flush_thresh,
-            fourcc=fourcc,
-            fps=fps,
-            frame_size=frame_size
-        ))
-        self._windows.append(MovementWindow(
-            show=show,
-            write=write,
-            output_ext=output_ext,
-            queue_size=queue_size,
-            flush_thresh=flush_thresh,
-            fourcc=fourcc,
-            fps=fps,
-            frame_size=frame_size,
-            thresh=movement_kwargs["THRESH"],
-            dilate=movement_kwargs["DILATE"],
-            pad=movement_kwargs["PAD"],
-            min_area=movement_kwargs["MIN_AREA"]
-        ))
-        # self._windows.append(ColorWindow(
-        #     HSV_dict=color_kwargs["HSV_DICT"],
-        #     show=show,
-        #     write=write,
-        #     output_ext=output_ext,
-        #     output_dir=output_dir,
-        #     queue_size=queue_size,
-        #     flush_thresh=flush_thresh,
-        #     fourcc=fourcc,
-        #     fps=fps,
-        #     frame_size=frame_size,
-        #     thresh=color_kwargs["THRESH"],
-        #     dilate=color_kwargs["DILATE"],
-        #     pad=color_kwargs["PAD"],
-        #     min_area=color_kwargs["MIN_AREA"]
-        # ))
-        # self._windows.append(TrailWindow(
-        #     show=show,
-        #     write=write,
-        #     output_ext=output_ext,
-        #     output_dir=output_dir,
-        #     queue_size=queue_size,
-        #     flush_thresh=flush_thresh,
-        #     fourcc=fourcc,
-        #     fps=fps,
-        #     frame_size=frame_size,
-        #     in_window=self._movement_win
-        # ))
 
+        if self._show["Input"] or self._write["Input"]:
+            self._windows.append(InputWindow(
+                show=show,
+                write=write,
+                output_ext=output_ext,
+                queue_size=queue_size,
+                flush_thresh=flush_thresh,
+                fourcc=fourcc,
+                fps=fps,
+                frame_size=frame_size
+            ))
+        if self._show["Movement"] or self._write["Movement"]:
+            self._windows.append(MovementWindow(
+                show=show,
+                write=write,
+                output_ext=output_ext,
+                queue_size=queue_size,
+                flush_thresh=flush_thresh,
+                fourcc=fourcc,
+                fps=fps,
+                frame_size=frame_size,
+                thresh=movement_kwargs["THRESH"],
+                dilate=movement_kwargs["DILATE"],
+                pad=movement_kwargs["PAD"],
+                min_area=movement_kwargs["MIN_AREA"]
+            ))
+        if self._show["Color"] or self._write["Color"]:
+            self._windows.append(ColorWindow(
+                HSV_dict=color_kwargs["HSV_DICT"],
+                show=show,
+                write=write,
+                output_ext=output_ext,
+                output_dir=output_dir,
+                queue_size=queue_size,
+                flush_thresh=flush_thresh,
+                fourcc=fourcc,
+                fps=fps,
+                frame_size=frame_size,
+                thresh=color_kwargs["THRESH"],
+                dilate=color_kwargs["DILATE"],
+                pad=color_kwargs["PAD"],
+                min_area=color_kwargs["MIN_AREA"]
+            ))
+        if self._show["Trail"] or self._write["Trail"]:
+            self._windows.append(TrailWindow(
+                show=show,
+                write=write,
+                output_ext=output_ext,
+                output_dir=output_dir,
+                queue_size=queue_size,
+                flush_thresh=flush_thresh,
+                fourcc=fourcc,
+                fps=fps,
+                frame_size=frame_size,
+                in_window=self._movement_win
+            ))
 
         self.register_metadata(
             "video_src",
@@ -195,10 +209,7 @@ class App:
                     print(f"Frames currently in input/reading queue: {self._reader.Q.qsize()}")
 
                 if i % 1000 == 0:
-                    print(f"Frame {i}/{self.total_frames}")
-                    
-                    # TODO: Remove this!
-                    break
+                    print(f"Frame {i}/{self.total_frames} ({i/self.total_frames * 100:.2f}%)")
 
                 if show:
                     # Check to see if user presses key
@@ -296,7 +307,9 @@ class App:
 
 if __name__ == "__main__":
     # Reading from config
-    video_src = config("INPUT_FILEPATH")
+    video_src = config("INPUT_SOURCE")
+    input_width = config("INPUT_WIDTH", default=None)
+    input_height = config("INPUT_HEIGHT", default=None)
     show = config("SHOW", default=True)
     write = config("WRITE", default=False)
     output_dir = config("OUTPUT_DIR", default="out")
@@ -310,6 +323,8 @@ if __name__ == "__main__":
 
     app = App(
         video_src=video_src,
+        input_width=input_width,
+        input_height=input_height,
         show=show,
         write=write,
         output_dir=output_dir,

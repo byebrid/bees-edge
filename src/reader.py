@@ -1,6 +1,7 @@
 from queue import Empty, Queue
 from threading import Thread
 from typing import Union
+import time
 
 import cv2
 
@@ -12,6 +13,11 @@ class ThreadedVideo:
 
     Stolen from https://pyimagesearch.com/2017/02/06/faster-video-file-fps-with-cv2-videocapture-and-opencv/.
     """
+    # This is the proportion of the max queue size that should be filled before triggering
+    # the reading thread to sleep for a little bit in order to let the consumer
+    # use up the current frames in the queue. Prevents overhead that results from
+    # the queue filling up entirely!
+    SLEEP_THRESH = 0.75
 
     def __init__(self, source: Union[str, int], queue_size:int=512):
         self.source = source
@@ -27,6 +33,7 @@ class ThreadedVideo:
         
         self.stopped = False
         self.Q = Queue(maxsize=queue_size)
+        self.queue_size = queue_size
         self.t = None  # To keep track of this Thread
 
     def start(self):
@@ -50,6 +57,10 @@ class ThreadedVideo:
             if self.stopped:
                 self.stream.release()
                 return
+
+            if self.Q.qsize() > self.SLEEP_THRESH * self.queue_size:
+                print("Reader sleeping... (ignore if not using webcam input, otherwise this is very bad)")
+                time.sleep(10)
             
             if not self.Q.full():
                 grabbed, frame = self.stream.read()
@@ -76,4 +87,4 @@ class ThreadedVideo:
         self.stopped = True
 
     def __repr__(self) -> str:
-        return f"<Reader: source=${self.s}>"
+        return f"<Reader: source=${self.source}>"

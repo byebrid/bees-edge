@@ -1,6 +1,10 @@
 .vscode
 .envrc
 
+# Profiling outputs
+*.lprof
+profile-*.txt
+
 out
 data
 # Note this doesn't ignore the example eg_config.json file provided!

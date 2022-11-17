@@ -1,5 +1,7 @@
 {
-    "INPUT_FILEPATH": 0,
+    "INPUT_SOURCE": 0,
+    "INPUT_WIDTH": null,
+    "INPUT_HEIGHT": null,
     "SHOW": {
         "Input": true,
         "Movement": true,
