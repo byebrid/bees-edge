@@ -68,8 +68,8 @@ class ThreadedVideo:
                 if not grabbed:
                     print("Reader is releasing itself!")
                     self.release()
-                
-                self.Q.put(frame)
+                else:
+                    self.Q.put(frame)
 
     def read(self):
         try:
