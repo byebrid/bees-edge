@@ -177,6 +177,8 @@ class App:
         
         # This lets us get average FPS for last 32 frames
         fps = FPS(size=32)
+        min_fps = 1000
+        max_fps = 0
 
         try:
             # We just care if we're showing/writing _any_ Windows
@@ -204,11 +206,16 @@ class App:
                 fps.tick()
 
                 if i % 100 == 0:
-                    print(f"Average FPS: {fps.get_average() if fps.get_average() is not None else -1:.2f}")
+                    ave_fps = fps.get_average()
+                    if ave_fps is not None:
+                        print(f"Average FPS: {ave_fps:.2f}")
+                        min_fps = min(min_fps, ave_fps)
+                        max_fps = max(max_fps, ave_fps)
+
                     # Show queue size for debugging purposes
                     print(f"Frames currently in input/reading queue: {self._reader.Q.qsize()}")
 
-                if i % 1000 == 0:
+                if i % 1000 == 0 and self.total_frames != 0:
                     print(f"Frame {i}/{self.total_frames} ({i/self.total_frames * 100:.2f}%)")
 
                 if show:
@@ -231,10 +238,6 @@ class App:
 
                 for window in self._windows:
                     window.update(frame=frame, index=i)
-                    # Window only shows/writes if it was told to originally, else does nothing!
-                    # TODO: This might be confusing, maybe change it back to way it
-                    # was before? Small issue is I want to say, if window.getShow(), then window.show(),
-                    # but that's a little confusing, one show is attribute, other is method!
                     window.show()
                     window.write()
 
@@ -250,6 +253,8 @@ class App:
             print("Releasing any output files, closing any windows")
             for window in self._windows:
                 window.release()
+
+            print(f"FPS range: {min_fps:.2f} to {max_fps:.2f}")
 
             if write:
                 print("Saving metadata to this run")
@@ -321,19 +326,45 @@ if __name__ == "__main__":
     movement_kwargs = config("MOVEMENT_KWARGS")
     color_kwargs = config("COLOR_KWARGS")
 
-    app = App(
-        video_src=video_src,
-        input_width=input_width,
-        input_height=input_height,
-        show=show,
-        write=write,
-        output_dir=output_dir,
-        output_ext=output_ext,
-        queue_size=queue_size,
-        flush_thresh=flush_thresh,
-        fourcc=fourcc,
-        frame_size=frame_size,
-        movement_kwargs=movement_kwargs,
-        color_kwargs=color_kwargs,
-    )
-    app.start()
+    if Path(video_src).is_dir():
+        print(f"Input source '{video_src}' is directory. Iterating over all files in directory...")
+        for video_src_i in Path(video_src).iterdir():
+            try:
+                print(f"Creating App from input: {video_src_i}...")
+                app = App(
+                    video_src=str(video_src_i), # Since opencv doesn't understand Path objects
+                    input_width=input_width,
+                    input_height=input_height,
+                    show=show,
+                    write=write,
+                    output_dir=output_dir,
+                    output_ext=output_ext,
+                    queue_size=queue_size,
+                    flush_thresh=flush_thresh,
+                    fourcc=fourcc,
+                    frame_size=frame_size,
+                    movement_kwargs=movement_kwargs,
+                    color_kwargs=color_kwargs,
+                )
+                app.start()
+            except Exception as e:
+                print(f"Something went wrong! Will keep trying with other files in directory. See exception message below:")
+                print(e)
+    else:
+        print(f"Creating App from input: {video_src}...")
+        app = App(
+            video_src=video_src,
+            input_width=input_width,
+            input_height=input_height,
+            show=show,
+            write=write,
+            output_dir=output_dir,
+            output_ext=output_ext,
+            queue_size=queue_size,
+            flush_thresh=flush_thresh,
+            fourcc=fourcc,
+            frame_size=frame_size,
+            movement_kwargs=movement_kwargs,
+            color_kwargs=color_kwargs,
+        )
+        app.start()

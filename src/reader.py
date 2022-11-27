@@ -60,7 +60,7 @@ class ThreadedVideo:
 
             if self.Q.qsize() > self.SLEEP_THRESH * self.queue_size:
                 print("Reader sleeping... (ignore if not using webcam input, otherwise this is very bad)")
-                time.sleep(10)
+                time.sleep(3)
             
             if not self.Q.full():
                 grabbed, frame = self.stream.read()

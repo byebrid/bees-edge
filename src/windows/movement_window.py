@@ -2,7 +2,7 @@ from typing import Tuple
 from windows.window import Window
 import cv2
 import numpy as np
-from utils import refine_mask, detect_motion
+from utils import refine_mask, detect_motion, detect_motion_old_way
 
 
 class MovementWindow(Window):
@@ -53,6 +53,8 @@ class MovementWindow(Window):
 
         # Get mask based on movement
         motion_mask = detect_motion(frame=frame, prev_frame=self._prev_frame)
+        # motion_mask = detect_motion_old_way(frame=frame, prev_frame=self._prev_frame, thresh=40, pad=0)
+
         # Create copy of original frame that only includes moving parts
         diff_frame = np.zeros(frame.shape, dtype=np.uint8)
         diff_frame[motion_mask] = frame[motion_mask]

@@ -115,12 +115,12 @@ def detect_motion(
     :param kernel_size: Width/height of kernel used to dilate the mask (provides a more filled-in image of each moving object), defaults to 63
     :return: A mask array (i.e. boolean) that can be used to index the given `frame` to only pull out the "moving" parts of the frame
     """
-    orig_shape = frame.shape
-    fx = 0.25
-    fy = 0.25
-
-    frame = cv2.resize(frame, dsize=None, fx=fx, fy=fy)
-    prev_frame = cv2.resize(prev_frame, dsize=None, fx=fx, fy=fy)
+    ###### RESIZING
+    # orig_shape = frame.shape
+    # fx = 0.25
+    # fy = 0.25
+    # frame = cv2.resize(frame, dsize=None, fx=fx, fy=fy)
+    # prev_frame = cv2.resize(prev_frame, dsize=None, fx=fx, fy=fy)
 
     # Compute pixel difference between consecutive frames (note this still has 3 channels)
     diff = cv2.absdiff(frame, prev_frame)
@@ -128,19 +128,25 @@ def detect_motion(
     gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
     # Cut off pixels that did not have "enough" movement. This is now a 2D array
     # of just 1s and 0s
-    _, threshed = cv2.threshold(
+    _, mask = cv2.threshold(
         src=gray, thresh=thresh, maxval=255, type=cv2.THRESH_BINARY
     )
+    
+    ###### RESIZING
     # Since we now have a very choppy/pixelly mask, we want to blur it out a bit.
     # This mimics finding the bounding boxes of bees (or whatever objects are
     # moving), but does so in a much cheaper/faster way!
-    kernel_size = int(kernel_size * fx) # Scale the kernel size to keep things consistent 
-    dilated_mask = cv2.dilate(threshed, kernel=np.ones((kernel_size, kernel_size)))
-    
-    # Up-res the final mask (note opencv expects opposite order of dimensions because of course it does)
-    dilated_mask = cv2.resize(dilated_mask, dsize=(orig_shape[1],orig_shape[0]))
+    # kernel_size = int(kernel_size * fx) # Scale the kernel size to keep things consistent 
+    # mask = cv2.dilate(threshed, kernel=np.ones((kernel_size, kernel_size)))
+    # # Up-res the final mask (note opencv expects opposite order of dimensions because of course it does)
+    # mask = cv2.resize(mask, dsize=(orig_shape[1],orig_shape[0]))
 
     # Convert to boolean so we can actually use it as a mask now
-    dilated_mask = dilated_mask.astype(bool)
+    mask = mask.astype(bool)
 
-    return dilated_mask
+    return mask
+
+
+def detect_motion_old_way(frame: np.ndarray, prev_frame: np.ndarray, thresh: int, pad: int) -> np.ndarray:
+    diff = cv2.absdiff(frame, prev_frame)
+    return refine_mask(frame=frame, mask=diff, ret_mask=True, thresh=thresh, pad=pad)
