@@ -3,13 +3,20 @@ from queue import Empty
 from random import randint
 import time
 import signal
+from typing import Union
 
 import cv2
 
 
-def producer(queue: Queue, filename: str, interrupt: Event):
+def producer(queue: Queue, source: Union[str, int], interrupt: Event):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    vc = cv2.VideoCapture(filename=filename)
+
+    if type(source) is str:
+        vc = cv2.VideoCapture(filename=source)
+    elif type(source) is int:
+        vc = cv2.VideoCapture(index=source)
+    else:
+        raise ValueError("`source` must be a filepath to a video, or an integer index for the camera")
 
     print("Producer: STARTED!", flush=True)
     i = 0
@@ -32,11 +39,11 @@ def producer(queue: Queue, filename: str, interrupt: Event):
     vc.release()
 
 
-def consumer(queue: Queue, filename: str, interrupt: Event):
+def consumer(queue: Queue, filename: str, interrupt: Event, frameSize=(1920, 1080), fps: int = 60):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     fourcc = cv2.VideoWriter_fourcc(*"XVID")
-    vw = cv2.VideoWriter(filename=filename, fourcc=fourcc, fps=60, frameSize=(1920, 1080))
+    vw = cv2.VideoWriter(filename=filename, fourcc=fourcc, fps=fps, frameSize=frameSize)
 
     print("Consumer: STARTED!", flush=True)
     i = 0
@@ -74,6 +81,9 @@ def ferry(producer_queue: Queue, consumer_queue: Queue, interrupt: Event):
             print(f"ferry: Found frame {i} was None!", flush=True)
             break
 
+        cv2.imshow("Input", frame)
+        cv2.waitKey(1)
+
         i += 1
 
 if __name__ == "__main__":
@@ -83,11 +93,15 @@ if __name__ == "__main__":
     interrupt_event = Event()
     consumer_done_event = Event()
 
-    input_filename = "data/scaevola/scaevola_long.mp4"
+    input_source = 0
+    # input_filename = "data/scaevola/scaevola_long.mp4"
     output_filename = "test_out.avi"
-    producer_proc = Process(target=producer, args=(producer_queue, input_filename, interrupt_event), name="ProducerProc")
+    frame_size = (640, 480)
+    fps = 30
+
+    producer_proc = Process(target=producer, args=(producer_queue, input_source, interrupt_event), name="ProducerProc")
     ferry_proc = Process(target=ferry, args=(producer_queue, consumer_queue, interrupt_event))
-    consumer_proc = Process(target=consumer, args=(consumer_queue, output_filename, interrupt_event), name="ConsumerProc")
+    consumer_proc = Process(target=consumer, args=(consumer_queue, output_filename, interrupt_event, frame_size, fps), name="ConsumerProc")
 
     consumer_proc.start()
     producer_proc.start()
@@ -101,6 +115,7 @@ if __name__ == "__main__":
                 break
         except KeyboardInterrupt:
             print("main: Received KeyboardInterrupt. Setting interrupt event and breaking out of infinite loop...", flush=True)
+            print("main: You may have to wait a minute for all child processes to gracefully exit!", flush=True)
             interrupt_event.set()
             break
 
