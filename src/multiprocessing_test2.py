@@ -6,111 +6,167 @@ import signal
 from typing import Union
 
 import cv2
+import numpy as np
+
+from utils import detect_motion
 
 
-def producer(queue: Queue, source: Union[str, int], interrupt: Event):
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+def get_video_capture(source: Union[str, int]) -> cv2.VideoCapture:
+    """
+    Get a VideoCapture object from either a given filepath or an interger 
+    representing the index of a webcam (e.g. source=0). Raises a ValueError if
+    we could not create a VideoCapture from the given `source`.
 
+    :param source: a string representing a filepath for a video, or an integer
+        representing a webcam's index.
+    :return: a VideoCapture object for the given `source`.
+    """
     if type(source) is str:
-        vc = cv2.VideoCapture(filename=source)
+        return cv2.VideoCapture(filename=source)
     elif type(source) is int:
-        vc = cv2.VideoCapture(index=source)
+        return cv2.VideoCapture(index=source)
     else:
         raise ValueError("`source` must be a filepath to a video, or an integer index for the camera")
 
-    print("Producer: STARTED!", flush=True)
+
+
+def reader(queue: Queue, source: Union[str, int], interrupt: Event):
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    vc = get_video_capture(source=source)
+
+    print("Reader: STARTED!", flush=True)
     i = 0
     while True:
         if interrupt.is_set():
-            print("Producer: Interrupted!", flush=True)
+            print("Reader: Interrupted!", flush=True)
             break
 
         grabbed, frame = vc.read()
         if not grabbed or frame is None:
             break
 
-        print(f"Producer: putting item#{i} onto queue", flush=True)
+        print(f"Reader: putting frame#{i} onto queue", flush=True)
         queue.put(frame)
         i += 1
     
-    print("Producer: Putting None on end of queue", flush=True)
+    print("Reader: Putting None on end of queue", flush=True)
     queue.put(None)
-    print("Producer: FINISHED!", flush=True)
+    print("Reader: FINISHED!", flush=True)
     vc.release()
 
 
-def consumer(queue: Queue, filename: str, interrupt: Event, frameSize=(1920, 1080), fps: int = 60):
+def writer(queue: Queue, filename: str, interrupt: Event, frameSize=(1920, 1080), fps: int = 60):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     fourcc = cv2.VideoWriter_fourcc(*"XVID")
     vw = cv2.VideoWriter(filename=filename, fourcc=fourcc, fps=fps, frameSize=frameSize)
 
-    print("Consumer: STARTED!", flush=True)
+    print("Writer: STARTED!", flush=True)
     i = 0
     while True:
-        print(f"Consumer: Waiting for item...", flush=True)
+        print(f"Writer: Waiting for frame...", flush=True)
         try:
             frame = queue.get(timeout=10)
         except Empty:
-            print(f"Consumer: Waited too long for item! Exiting...", flush=True)
+            print(f"Writer: Waited too long for frame! Exiting...", flush=True)
             break
-        print(f"Consumer: Got item#{i}", flush=True)
+        print(f"Writer: Got frame#{i}", flush=True)
         if frame is None:
-            print("Consumer: Hit end of queue", flush=True)
+            print("Writer: Hit end of queue", flush=True)
             break
         
         vw.write(frame)
         i += 1
     
-    print("Consumer: FINISHED!", flush=True)
+    print("Writer: FINISHED!", flush=True)
     vw.release()
 
 
-def ferry(producer_queue: Queue, consumer_queue: Queue, interrupt: Event):
+def ferry(reader_queue: Queue, input_write_queue: Queue, motion_queue: Queue, interrupt: Event):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     i = 0
     while True:
-        print(f"ferry: Getting frame {i} from producer...", flush=True)
-        frame = producer_queue.get(timeout=5)
+        print(f"ferry: Getting frame {i} from reader queue...", flush=True)
+        frame = reader_queue.get(timeout=5)
 
-        print(f"ferry: Putting frame {i} into consumer...", flush=True)
-        consumer_queue.put(frame)
+        print(f"ferry: Putting frame {i} into input write queue...", flush=True)
+        input_write_queue.put(frame)
+        print(f"ferry: Putting frame {i} into motion queue...", flush=True)
+        motion_queue.put(frame)
 
         if frame is None:
             print(f"ferry: Found frame {i} was None!", flush=True)
             break
 
-        cv2.imshow("Input", frame)
-        cv2.waitKey(1)
+        i += 1
 
+
+def motion(motion_queue: Queue, writing_queue: Queue, interrupt: Event):
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    i = 0
+    prev_frame = None
+    while True:
+        print(f"Motion: Getting frame {i} from motion queue...", flush=True)
+        frame = motion_queue.get(timeout=5)
+        # Initialise previous frame
+        if prev_frame is None:
+            prev_frame = frame
+
+        if frame is None:
+            print(f"Motion: Found frame {i} was None!", flush=True)
+            # Make sure motion writer knows to stop
+            writing_queue.put(None)
+            break
+
+        motion_mask = detect_motion(frame=frame, prev_frame=prev_frame)
+        diff_frame = np.zeros(frame.shape, dtype=np.uint8)
+        diff_frame[motion_mask] = frame[motion_mask]
+
+        print(f"Motion: Putting frame {i} into motion write queue...", flush=True)
+        writing_queue.put(diff_frame)
+
+        prev_frame = frame
         i += 1
 
 if __name__ == "__main__":
-    producer_queue = Queue(maxsize=512)
-    consumer_queue = Queue(maxsize=512)
+    reader_queue = Queue(maxsize=512)
+    write_input_queue = Queue(maxsize=512)
+    motion_queue = Queue(maxsize=512)
+    write_motion_queue = Queue(maxsize=512)
 
     interrupt_event = Event()
-    consumer_done_event = Event()
 
     input_source = 0
-    # input_filename = "data/scaevola/scaevola_long.mp4"
+    # input_source = "data/scaevola/scaevola_long.mp4"
     output_filename = "test_out.avi"
     frame_size = (640, 480)
     fps = 30
 
-    producer_proc = Process(target=producer, args=(producer_queue, input_source, interrupt_event), name="ProducerProc")
-    ferry_proc = Process(target=ferry, args=(producer_queue, consumer_queue, interrupt_event))
-    consumer_proc = Process(target=consumer, args=(consumer_queue, output_filename, interrupt_event, frame_size, fps), name="ConsumerProc")
+    reader_proc = Process(target=reader, args=(reader_queue, input_source, interrupt_event), name="ReaderProc")
+    ferry_proc = Process(target=ferry, args=(reader_queue, write_input_queue, motion_queue, interrupt_event), name="FerryProc")
+    write_input_proc = Process(target=writer, args=(write_input_queue, "input.avi", interrupt_event, frame_size, fps), name="WriteInputProc")
+    motion_proc = Process(target=motion, args=(motion_queue, write_motion_queue, interrupt_event), name="MotionProc")
+    write_motion_proc = Process(target=writer, args=(write_motion_queue, "motion.avi", interrupt_event, frame_size, fps), name="WriteMotionProc")
 
-    consumer_proc.start()
-    producer_proc.start()
-    ferry_proc.start()
+    procs = (
+        reader_proc,
+        ferry_proc,
+        write_input_proc,
+        motion_proc,
+        write_motion_proc
+    )
+
+    for proc in procs:
+        print(f"main: Starting {proc.name}")
+        proc.start()
 
     while True:
         try:
             time.sleep(0.5)
-            if not consumer_proc.is_alive() and not producer_proc.is_alive() and not ferry_proc.is_alive():
+            if not any([proc.is_alive() for proc in procs]):
                 print("main: All child processes appear to have finished? Breaking out of infinite loop...")
                 break
         except KeyboardInterrupt:
@@ -119,10 +175,6 @@ if __name__ == "__main__":
             interrupt_event.set()
             break
 
-    producer_proc.join()
-    ferry_proc.join()
-    consumer_proc.join()
-
-    print(f"Producer queue: {producer_queue.qsize()} items", flush=True)
-    print(f"Consumer queue: {consumer_queue.qsize()} items", flush=True)
-
+    for proc in procs:
+        print(f"main: Joining {proc.name}")
+        proc.join()
