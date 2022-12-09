@@ -1,18 +1,23 @@
 from __future__ import annotations
-from threading import Thread, Event
+
+import json
+import logging
+import shutil
 import threading
-from queue import Empty, Queue
 import time
-from typing import Union, Tuple
 from datetime import datetime
 from pathlib import Path
-import json
-import shutil
+from queue import Empty, Queue
+from threading import Event, Thread
+from typing import Tuple, Union, Optional
 
 import cv2
 import numpy as np
 
 from fps import FPS
+
+LOGGER = logging.getLogger(__name__)
+LOGGER.setLevel(logging.DEBUG)
 
 
 def config(key: str):
@@ -21,18 +26,25 @@ def config(key: str):
         return config_dict[key]
 
 
-class PrintableThread(Thread):
-    def __init__(self, name: str, verbose: bool = False) -> None:
+class LoggingThread(Thread):
+    def __init__(self, name: str, logger: logging.Logger) -> None:
         super().__init__(name=name)
 
-        self.verbose = verbose
+        self.logger = logger
 
-    def print(self, *args, important: bool = False, **kwargs):
-        if important or self.verbose:
-            print(f"{self.name:<16}: ", *args, **kwargs, flush=True)
+    def debug(self, msg, *args, **kwargs):
+        self.logger.debug(msg, *args, **kwargs)
 
+    def info(self, msg, *args, **kwargs):
+        self.logger.info(msg, *args, **kwargs)
 
-class Reader(PrintableThread):
+    def warning(self, msg, *args, **kwargs):
+        self.logger.warning(msg, *args, **kwargs)
+
+    def error(self, msg, *args, **kwargs):
+        self.logger.error(msg, *args, **kwargs)
+
+class Reader(LoggingThread):
     def __init__(
         self,
         reading_queue: Queue,
@@ -40,9 +52,9 @@ class Reader(PrintableThread):
         stop_signal: Event,
         sleep_seconds: int,
         flush_proportion: float,
-        verbose: bool = False,
+        logger: logging.Logger
     ) -> None:
-        super().__init__(name="ReaderThread", verbose=verbose)
+        super().__init__(name="ReaderThread", logger=logger)
 
         self.reading_queue = reading_queue
         self.video_source = video_source
@@ -53,18 +65,16 @@ class Reader(PrintableThread):
         # Make video capture now so we can dynamically retrieve its FPS and frame size
         self.vc = self.get_video_capture(source=self.video_source)
 
-        self.print(
-            f"Will sleep {self.sleep_seconds} seconds if reading queue fills up with {self.flush_thresh} frames. This *should not happen* if you're using a live webcam, else the frames are being processed too slowly!",
-            important=True,
+        self.info(
+            f"Will sleep {self.sleep_seconds} seconds if reading queue fills up with {self.flush_thresh} frames. This *should not happen* if you're using a live webcam, else the frames are being processed too slowly!"
         )
 
     def run(self) -> None:
         while True:
             if self.stop_signal.is_set():
-                self.print("Interrupted!", important=True)
+                self.warning("Received stop signal")
                 break
 
-            # self.print(f"Frames in READING queue = {self.reading_queue.qsize()}")
             grabbed, frame = self.vc.read()
             if not grabbed or frame is None:
                 break
@@ -74,18 +84,18 @@ class Reader(PrintableThread):
             # will lose the next `self.sleep_seconds` seconds of footage, but is
             # fine if working with video files as input
             if self.reading_queue.qsize() >= self.flush_thresh:
-                self.print(
+                self.warning(
                     f"Queue filled up to threshold. Sleeping {self.sleep_seconds} seconds to make sure queue can be drained..."
                 )
                 time.sleep(self.sleep_seconds)
-                self.print(
+                self.info(
                     f"Finished sleeping with {self.reading_queue.qsize()} frames still in buffer!"
                 )
 
             self.reading_queue.put(frame)
 
         # Append None to indicate end of queue
-        self.print("Adding None to end of reading queue", important=True)
+        self.info("Adding None to end of reading queue")
         self.reading_queue.put(None)
         self.vc.release()
         self.stop_signal.set()
@@ -119,7 +129,7 @@ class Reader(PrintableThread):
             )
 
 
-class Writer(PrintableThread):
+class Writer(LoggingThread):
     def __init__(
         self,
         writing_queue: Queue,
@@ -127,9 +137,9 @@ class Writer(PrintableThread):
         frame_size: Tuple[int, int],
         fps: int,
         stop_signal: Event,
-        verbose: bool = False,
+        logger: logging.Logger
     ) -> None:
-        super().__init__(name="WriterThread", verbose=verbose)
+        super().__init__(name="WriterThread", logger=logger)
 
         self.writing_queue = writing_queue
         self.filepath = filepath
@@ -139,9 +149,8 @@ class Writer(PrintableThread):
 
         self.fourcc = cv2.VideoWriter_fourcc(*"XVID")
         self.flush_thresh = int(0.75 * writing_queue.maxsize)
-        self.print(
-            f"Will flush buffer to output file every {self.flush_thresh} frames",
-            important=True,
+        self.warning(
+            f"Will flush buffer to output file every {self.flush_thresh} frames"
         )
 
     @classmethod
@@ -151,7 +160,7 @@ class Writer(PrintableThread):
         writing_queue: Queue,
         filepath: str,
         stop_signal: Event,
-        verbose: bool = False,
+        logger: logging.Logger
     ) -> Writer:
         fps = reader.get_fps()
         frame_size = reader.get_frame_size()
@@ -161,7 +170,7 @@ class Writer(PrintableThread):
             frame_size=frame_size,
             fps=fps,
             stop_signal=stop_signal,
-            verbose=verbose,
+            logger=logger
         )
         return writer
 
@@ -175,54 +184,52 @@ class Writer(PrintableThread):
 
         loop_is_running = True
         while loop_is_running:
-            if (
-                self.writing_queue.qsize() >= self.flush_thresh
-                or self.stop_signal.is_set()
-            ):
-                self.print(
-                    f"Queue size exceeded ({self.writing_queue.qsize() >= self.flush_thresh}) OR stop signal ({self.stop_signal.is_set()})"
-                )
-
-                # Only flush the threshold number of frames, OR remaining frames if there are only a few left
-                frames_to_flush = min(self.writing_queue.qsize(), self.flush_thresh)
-                self.print(f"Flushing {frames_to_flush} frames...")
-
-                for i in range(frames_to_flush):
-                    try:
-                        frame = self.writing_queue.get(timeout=10)
-                    except Empty:
-                        self.print(
-                            f"Waited too long for frame! Exiting...", important=True
-                        )
-                        loop_is_running = False
-                        break
-                    if frame is None:
-                        loop_is_running = False
-                        break
-
-                    vw.write(frame)
-                self.print(f"Flushed {frames_to_flush} frames!")
-
             time.sleep(2)
+
+            if self.writing_queue.qsize() < self.flush_thresh and not self.stop_signal.is_set():
+                continue
+
+            self.info(
+                f"Queue size exceeded ({self.writing_queue.qsize() >= self.flush_thresh}) OR stop signal ({self.stop_signal.is_set()})"
+            )
+
+            # Only flush the threshold number of frames, OR remaining frames if there are only a few left
+            frames_to_flush = min(self.writing_queue.qsize(), self.flush_thresh)
+            self.info(f"Flushing {frames_to_flush} frames...")
+
+            for i in range(frames_to_flush):
+                try:
+                    frame = self.writing_queue.get(timeout=10)
+                except Empty:
+                    self.warning(
+                        f"Waited too long for frame! Exiting..."
+                    )
+                    loop_is_running = False
+                    break
+                if frame is None:
+                    loop_is_running = False
+                    break
+
+                vw.write(frame)
+            self.info(f"Flushed {frames_to_flush} frames!")
 
         vw.release()
 
 
-class Ferry(PrintableThread):
+class Ferry(LoggingThread):
     def __init__(
         self,
         reading_queue: Queue,
         motion_input_queue: Queue,
         stop_signal: Event,
         sleep_seconds: int,
-        verbose: bool = False,
+        logger: logging.Logger
     ) -> None:
-        super().__init__(name="FerryThread", verbose=verbose)
+        super().__init__(name="FerryThread", logger=logger)
 
         self.reading_queue = reading_queue
         self.motion_input_queue = motion_input_queue
         self.stop_signal = stop_signal
-
         self.sleep_seconds = sleep_seconds
 
     def run(self) -> None:
@@ -236,19 +243,17 @@ class Ferry(PrintableThread):
                 frame = self.reading_queue.get(timeout=5)
                 fps.tick()
             except Empty:
-                self.print(
-                    "Timed out waiting for frame from reading queue! Perhaps consider changing how long the Reader sleeps for?",
-                    important=True,
+                self.warning(
+                    "Timed out waiting for frame from reading queue! Perhaps consider changing how long the Reader sleeps for?"
                 )
                 continue
 
             if self.motion_input_queue.qsize() >= flush_thresh:
-                self.print(
-                    f"    WARNING - Sleeping for {self.sleep_seconds} seconds to let MotionDetector clear its queue...",
-                    important=True,
+                self.warning(
+                    f"    WARNING - Sleeping for {self.sleep_seconds} seconds to let MotionDetector clear its queue..."
                 )
                 time.sleep(self.sleep_seconds)
-                self.print("Finished sleeping!")
+                self.info("Finished sleeping!")
 
             self.motion_input_queue.put(frame)
 
@@ -256,13 +261,13 @@ class Ferry(PrintableThread):
                 return
 
             if i % 1000 == 0:
-                self.print(f"handled frame#{i}")
-                self.print(f"FPS = {fps.get_average()}", important=True)
+                self.info(f"handled frame#{i}")
+                self.warning(f"FPS = {fps.get_average()}")
 
             i += 1
 
 
-class MotionDetector(PrintableThread):
+class MotionDetector(LoggingThread):
     def __init__(
         self,
         input_queue: Queue,
@@ -272,9 +277,9 @@ class MotionDetector(PrintableThread):
         movement_threshold: int,
         persist_factor: float,
         stop_signal: Event,
-        verbose: bool = False,
+        logger: logging.Logger
     ) -> None:
-        super().__init__(name="MotionThread", verbose=verbose)
+        super().__init__(name="MotionThread", logger=logger)
 
         self.input_queue = input_queue
         self.writing_queue = writing_queue
@@ -291,7 +296,8 @@ class MotionDetector(PrintableThread):
         self.movement_threshold = movement_threshold
         self.persist_factor = persist_factor
 
-        self.print(f"Dilation kernel is {self.dilation_kernel.shape}", important=True)
+        if self.downscale_factor != 1:
+            self.warning(f"Dilation kernel downscaled by {downscale_factor}x from {dilate_kernel_size} to {self.dilation_kernel.shape[0]}")
 
     def run(self) -> None:
         self.prev_frame = None
@@ -301,9 +307,8 @@ class MotionDetector(PrintableThread):
                 frame = self.input_queue.get(timeout=10)
             except Empty:
                 if self.stop_signal.is_set():
-                    self.print(
-                        "Waited too long to get frame from input queue? This shouldn't happen!",
-                        important=True,
+                    self.error(
+                        "Waited too long to get frame from input queue? This shouldn't happen!"
                     )
                 continue
             if frame is None:
@@ -371,8 +376,10 @@ def main(
 ):
     start = time.time()
 
+    # Make sure opencv doesn't use too many threads and hog CPUs
     cv2.setNumThreads(num_opencv_threads)
 
+    # Create queues for transferring data between threads (or processes)
     reading_queue = Queue(maxsize=512)
     motion_input_queue = Queue(maxsize=512)
     writing_queue = Queue(maxsize=512)
@@ -380,11 +387,26 @@ def main(
     stop_signal = Event()
     pause_reading_signal = Event()
 
+    # Figure out output filepath for this particular run
     output_directory = Path(f"out/{datetime.now()}")
     output_directory.mkdir()
     output_filepath = str(output_directory / "motion001.avi")
-    print(f"Outputting to {output_filepath}")
 
+    # Create some handlers for logging output to both console and file
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.WARNING)
+    console_handler.setFormatter(logging.Formatter("[%(threadName)-14s] %(msg)s"))
+    file_handler = logging.FileHandler(filename=output_directory / "output.log")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)-8s] [%(threadName)-14s] %(msg)s"))
+    # Make sure any prior handlers are removed
+    LOGGER.handlers.clear()
+    LOGGER.addHandler(console_handler)
+    LOGGER.addHandler(file_handler)
+
+    LOGGER.warning(f"Outputting to {output_filepath}")
+
+    # Create all of our threads
     threads = (
         reader := Reader(
             reading_queue=reading_queue,
@@ -392,7 +414,7 @@ def main(
             stop_signal=stop_signal,
             sleep_seconds=reader_sleep_seconds,
             flush_proportion=reader_flush_proportion,
-            verbose=True,
+            logger=LOGGER,
         ),
         motion_detector := MotionDetector(
             input_queue=reading_queue,
@@ -402,52 +424,52 @@ def main(
             movement_threshold=movement_threshold,
             persist_factor=persist_factor,
             stop_signal=stop_signal,
-            verbose=True,
+            logger=LOGGER,
         ),
         writer := Writer.from_reader(
             reader=reader,
             writing_queue=writing_queue,
             filepath=output_filepath,
             stop_signal=stop_signal,
-            verbose=True,
+            logger=LOGGER,
         ),
     )
 
     for thread in threads:
-        print(f"main: Starting {thread.name}")
+        LOGGER.info(f"Starting {thread.name}")
         thread.start()
 
+    # Regularly poll to check if all threads have finished. If they haven't finished,
+    # just sleep a little and check later
     while True:
         try:
             time.sleep(5)
             if not any([thread.is_alive() for thread in threads]):
-                print(
-                    "main: All child processes appear to have finished! Exiting infinite loop..."
+                LOGGER.warning(
+                    "All child processes appear to have finished! Exiting infinite loop..."
                 )
                 break
 
-            print("\n", flush=True)
             for queue, queue_name in zip(
                 [reading_queue, motion_input_queue, writing_queue],
                 ["Reading", "Motion", "Writing"],
             ):
-                print(f"{queue_name} queue size: {queue.qsize()}")
-            print("\n", flush=True)
+                LOGGER.info(f"{queue_name} queue size: {queue.qsize()}")
         except (KeyboardInterrupt, Exception) as e:
-            print(
-                "main: Received KeyboardInterrupt or some kind of Exception. Setting interrupt event and breaking out of infinite loop...",
+            LOGGER.error(
+                "Received KeyboardInterrupt or some kind of Exception. Setting interrupt event and breaking out of infinite loop...",
                 flush=True,
             )
-            print(
-                "main: You may have to wait a minute for all child processes to gracefully exit!",
+            LOGGER.info(
+                "You may have to wait a minute for all child processes to gracefully exit!",
                 flush=True,
             )
-            print(e)
+            LOGGER.exception()
             stop_signal.set()
             break
 
     for thread in threads:
-        print(f"main: Joining {thread.name}")
+        LOGGER.info(f"Joining {thread.name}")
         thread.join()
 
     # Copy config for record-keeping
@@ -460,7 +482,7 @@ def main(
     with open(output_directory / "stats.json", "w") as f:
         json.dump(stats, f)
 
-    print(f"Finished main script in {duration_seconds:.2f} seconds.")
+    LOGGER.info(f"Finished main() in {duration_seconds:.2f} seconds.")
 
 
 if __name__ == "__main__":
