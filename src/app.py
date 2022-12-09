@@ -1,7 +1,13 @@
+from __future__ import annotations
 from threading import Thread, Event
+import threading
 from queue import Empty, Queue
 import time
 from typing import Union, Tuple
+from datetime import datetime
+from pathlib import Path
+import json
+import shutil
 
 import cv2
 import numpy as np
@@ -9,22 +15,10 @@ import numpy as np
 from fps import FPS
 
 
-def get_video_capture(source: Union[str, int]) -> cv2.VideoCapture:
-    """
-    Get a VideoCapture object from either a given filepath or an interger 
-    representing the index of a webcam (e.g. source=0). Raises a ValueError if
-    we could not create a VideoCapture from the given `source`.
-
-    :param source: a string representing a filepath for a video, or an integer
-        representing a webcam's index.
-    :return: a VideoCapture object for the given `source`.
-    """
-    if type(source) is str:
-        return cv2.VideoCapture(filename=source)
-    elif type(source) is int:
-        return cv2.VideoCapture(index=source)
-    else:
-        raise ValueError("`source` must be a filepath to a video, or an integer index for the camera")
+def config(key: str):
+    with open("config.json", "r") as f:
+        config_dict = json.load(f)
+        return config_dict[key]
 
 
 # def get_frame_size(video_capture: cv2.VideoCapture) -> Tuple[int, int]:
@@ -49,22 +43,22 @@ class Reader(PrintableThread):
         self.reading_queue = reading_queue
         self.video_source = video_source
         self.stop_signal = stop_signal
+        self.sleep_seconds = sleep_seconds
 
         self.flush_thresh = int(flush_proportion * reading_queue.maxsize)
-        self.sleep_seconds = sleep_seconds
+        # Make video capture now so we can dynamically retrieve its FPS and frame size
+        self.vc = self.get_video_capture(source=self.video_source)
 
         self.print(f"Will sleep {self.sleep_seconds} seconds if reading queue fills up with {self.flush_thresh} frames. This *should not happen* if you're using a live webcam, else the frames are being processed too slowly!", important=True)
 
     def run(self) -> None:
-        vc = get_video_capture(source=self.video_source)
-
         while True:
             if self.stop_signal.is_set():
                 self.print("Interrupted!", important=True)
                 break
             
             # self.print(f"Frames in READING queue = {self.reading_queue.qsize()}")
-            grabbed, frame = vc.read()
+            grabbed, frame = self.vc.read()
             if not grabbed or frame is None:
                 break
 
@@ -82,8 +76,34 @@ class Reader(PrintableThread):
         # Append None to indicate end of queue
         self.print("Adding None to end of reading queue", important=True)
         self.reading_queue.put(None)
-        vc.release()
+        self.vc.release()
         self.stop_signal.set()
+
+    def get_fps(self) -> int:
+        return int(self.vc.get(cv2.CAP_PROP_FPS))
+
+    def get_frame_size(self) -> Tuple[int]:
+        width = int(self.vc.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(self.vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        return (width, height)
+
+    @staticmethod
+    def get_video_capture(source: Union[str, int]) -> cv2.VideoCapture:
+        """
+        Get a VideoCapture object from either a given filepath or an interger 
+        representing the index of a webcam (e.g. source=0). Raises a ValueError if
+        we could not create a VideoCapture from the given `source`.
+
+        :param source: a string representing a filepath for a video, or an integer
+            representing a webcam's index.
+        :return: a VideoCapture object for the given `source`.
+        """
+        if type(source) is str:
+            return cv2.VideoCapture(filename=source)
+        elif type(source) is int:
+            return cv2.VideoCapture(index=source)
+        else:
+            raise ValueError("`source` must be a filepath to a video, or an integer index for the camera")
 
 
 class Writer(PrintableThread):
@@ -99,6 +119,13 @@ class Writer(PrintableThread):
         self.fourcc = cv2.VideoWriter_fourcc(*"XVID")
         self.flush_thresh = int(0.75 * writing_queue.maxsize)
         self.print(f"Will flush buffer to output file every {self.flush_thresh} frames", important=True)
+
+    @classmethod
+    def from_reader(cls, reader: Reader, writing_queue: Queue, filepath: str, stop_signal: Event, verbose: bool = False) -> Writer:
+        fps = reader.get_fps()
+        frame_size = reader.get_frame_size()
+        writer = Writer(writing_queue=writing_queue, filepath=filepath, frame_size=frame_size, fps=fps, stop_signal=stop_signal, verbose=verbose)
+        return writer
 
     def run(self) -> None:
         vw = cv2.VideoWriter(filename=self.filepath, fourcc=self.fourcc, fps=self.fps, frameSize=self.frame_size)
@@ -173,7 +200,7 @@ class Ferry(PrintableThread):
 
 
 class MotionDetector(PrintableThread):
-    def __init__(self, input_queue: Queue, writing_queue: Queue, downscale_factor: int, dilate_kernel_size: int, movement_threshold: int, stop_signal: Event, verbose: bool = False) -> None:
+    def __init__(self, input_queue: Queue, writing_queue: Queue, downscale_factor: int, dilate_kernel_size: int, movement_threshold: int, persist_factor: float, stop_signal: Event, verbose: bool = False) -> None:
         super().__init__(name="MotionThread", verbose=verbose)
 
         self.input_queue = input_queue
@@ -181,6 +208,7 @@ class MotionDetector(PrintableThread):
         self.stop_signal = stop_signal
 
         self.prev_frame = None
+        self.prev_diff = None
 
         # For motion detection
         self.downscale_factor = downscale_factor
@@ -188,6 +216,7 @@ class MotionDetector(PrintableThread):
         downscaled_kernel_size = int(dilate_kernel_size / self.downscale_factor)
         self.dilation_kernel = np.ones((downscaled_kernel_size, downscaled_kernel_size))
         self.movement_threshold = movement_threshold
+        self.persist_factor = persist_factor
 
         self.print(f"Dilation kernel is {self.dilation_kernel.shape}", important=True)
 
@@ -218,10 +247,15 @@ class MotionDetector(PrintableThread):
 
         if self.prev_frame is None:
             self.prev_frame = downscaled_frame
+        if self.prev_diff is None:
+            self.prev_diff = np.zeros(self.prev_frame.shape, dtype=np.uint8)
         
         # Compute pixel difference between consecutive frames (note this still has 3 channels)
         # Note that previous frame was already downscaled!
         diff = cv2.absdiff(downscaled_frame, self.prev_frame)
+        # Add decayed version of previous diff to help temporarily stationary bees "persist"
+        diff += (self.prev_diff * self.persist_factor).astype(np.uint8)
+
         # Convert to grayscale
         gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
         # Cut off pixels that did not have "enough" movement. This is now a 2D array
@@ -239,6 +273,7 @@ class MotionDetector(PrintableThread):
 
         # Save downscaled frame for use in next iteration
         self.prev_frame = downscaled_frame
+        self.prev_diff = diff
 
         # Return the final frame with only regions of "movement" included, everything
         # else blacked out
@@ -249,6 +284,8 @@ class MotionDetector(PrintableThread):
 
 
 def main():
+    cv2.setNumThreads(10)
+
     reading_queue = Queue(maxsize=512)
     motion_input_queue = Queue(maxsize=512)
     writing_queue = Queue(maxsize=512)
@@ -256,17 +293,16 @@ def main():
     stop_signal = Event()
     pause_reading_signal = Event()
 
-    # input_source = 0
-    video_source = "data/scaevola/scaevola_long.mp4"
-    output_filename = "motion.avi"
-    frame_size = (1920, 1080)
-    fps = 60
+    video_source = config("video_source")
+    output_directory = Path(f"out/{datetime.now()}")
+    output_directory.mkdir() 
+    output_filepath = str(output_directory / "motion001.avi")
+    print(f"Outputting to {output_filepath}")
 
     threads = (
-        Reader(reading_queue=reading_queue, video_source=video_source, stop_signal=stop_signal, sleep_seconds=5, flush_proportion=0.9, verbose=True),
-        Ferry(reading_queue=reading_queue, motion_input_queue=motion_input_queue, stop_signal=stop_signal, sleep_seconds=5, verbose=True),
-        MotionDetector(input_queue=motion_input_queue, writing_queue=writing_queue, downscale_factor=16, dilate_kernel_size=63, movement_threshold=40, stop_signal=stop_signal, verbose=True),
-        Writer(writing_queue=writing_queue, filepath=output_filename, frame_size=frame_size, fps=fps, stop_signal=stop_signal, verbose=True)
+        reader := Reader(reading_queue=reading_queue, video_source=video_source, stop_signal=stop_signal, sleep_seconds=config("reader_sleep_seconds"), flush_proportion=config("reader_flush_proportion"), verbose=True),
+        motion_detector := MotionDetector(input_queue=reading_queue, writing_queue=writing_queue, downscale_factor=config("downscale_factor"), dilate_kernel_size=config("dilate_kernel_size"), movement_threshold=config("movement_threshold"), persist_factor=config("persist_factor"), stop_signal=stop_signal, verbose=True),
+        writer := Writer.from_reader(reader=reader, writing_queue=writing_queue, filepath=output_filepath, stop_signal=stop_signal, verbose=True)
     )
 
     for thread in threads:
@@ -294,6 +330,9 @@ def main():
     for thread in threads:
         print(f"main: Joining {thread.name}")
         thread.join()
+
+    # Copy config for record-keeping
+    shutil.copy("config.json", output_directory / "config.json")
     
 
 if __name__ == "__main__":
