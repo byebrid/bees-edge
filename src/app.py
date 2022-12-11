@@ -10,6 +10,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Tuple, Union, Optional
+from itertools import product
 
 import cv2
 import numpy as np
@@ -44,6 +45,68 @@ class LoggingThread(Thread):
     def error(self, msg, *args, **kwargs):
         self.logger.error(msg, *args, **kwargs)
 
+    def smart_sleep(self, sleep_seconds: int, queue: Queue) -> int:
+        """
+        Sleeps for `sleep_seconds` seconds. Afterwards, if `queue` is completely
+        empty, this implies that we slept for too long, in which case this will
+        return a number slightly *smaller* than `sleep_seconds` which should be 
+        used for the next sleep. If `queue` is still too full, then this will
+        return a *larger* number. If `queue` is in sweet spot, then just returns
+        the given `sleep_seconds`.
+
+        This will never return a negative number (so long as you don't provide it
+        with a negative number).
+
+
+        :param queue: queue whose throughput we want to optimise
+        :return: adjusted sleep time
+        """
+        qsize_before = queue.qsize()
+        time.sleep(sleep_seconds)
+        self.debug("WOKE UP!")
+        qsize_after = queue.qsize()
+        
+        lower_qsize = int(0.05 * queue.maxsize)
+        ideal_qsize = int(0.10 * queue.maxsize)
+        upper_qsize = int(0.15 * queue.maxsize)
+        
+        # Best case, we don't need to adust sleep time
+        if qsize_after >= lower_qsize and qsize_after <= upper_qsize:
+            LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; within range of {lower_qsize}-{upper_qsize}; sleep of {sleep_seconds} sec was ideal!")
+            return sleep_seconds
+
+        # If queue size is *really* small, then reduce sleep by large amount
+        if qsize_after <= 2:
+            new_sleep_seconds = sleep_seconds * 0.90
+            LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec")
+            return new_sleep_seconds
+
+        # Need to shorten sleep time if too many frames are drained
+        if qsize_after < lower_qsize:
+            new_sleep_seconds = sleep_seconds * 0.95
+            LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec")
+            return new_sleep_seconds
+        
+        # Need to extend sleep time if too few frames are drained
+        if qsize_after > upper_qsize:
+            new_sleep_seconds = sleep_seconds * 1.05
+            LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; *above* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec")
+            return new_sleep_seconds
+
+
+        # # Account for edge case where queue size is actually greater after 
+        # # sleeping? Guess this actually lets us work with queues in both directions,
+        # # so maybe not so weird!
+        # delta_qsize = max(0, qsize_after - qsize_before)
+        # if delta_qsize == 0:
+
+        # ideal_frames_removed = (qsize_before - ideal_qsize)
+        # current_removal_rate = sleep_seconds / delta_qsize
+        # ideal_sleep = current_removal_rate * ideal_frames_removed
+        # LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; outside of range of {lower_qsize}-{upper_qsize}; wanted {ideal_frames_removed} frames removed @ current rate of {current_removal_rate:.2f} sec/frame; adjusting sleep to {ideal_sleep} sec")
+        # return ideal_sleep
+
+
 class Reader(LoggingThread):
     def __init__(
         self,
@@ -63,7 +126,12 @@ class Reader(LoggingThread):
 
         self.flush_thresh = int(flush_proportion * reading_queue.maxsize)
         # Make video capture now so we can dynamically retrieve its FPS and frame size
-        self.vc = self.get_video_capture(source=self.video_source)
+        try:
+            self.vc = self.get_video_capture(source=self.video_source)
+        except ValueError:
+            self.stop_signal.set()
+            self.reading_queue.put(None)
+            self.error(f"Could not make VideoCapture from source '{video_source}'")
 
         self.info(
             f"Will sleep {self.sleep_seconds} seconds if reading queue fills up with {self.flush_thresh} frames. This *should not happen* if you're using a live webcam, else the frames are being processed too slowly!"
@@ -87,7 +155,8 @@ class Reader(LoggingThread):
                 self.warning(
                     f"Queue filled up to threshold. Sleeping {self.sleep_seconds} seconds to make sure queue can be drained..."
                 )
-                time.sleep(self.sleep_seconds)
+                self.sleep_seconds = self.smart_sleep(sleep_seconds=self.sleep_seconds, queue=self.reading_queue)
+                # time.sleep(self.sleep_seconds)
                 self.info(
                     f"Finished sleeping with {self.reading_queue.qsize()} frames still in buffer!"
                 )
@@ -392,6 +461,9 @@ def main(
     output_directory.mkdir()
     output_filepath = str(output_directory / "motion001.avi")
 
+    # Copy config for record-keeping
+    shutil.copy("config.json", output_directory / "config.json")
+
     # Create some handlers for logging output to both console and file
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.WARNING)
@@ -472,9 +544,6 @@ def main(
         LOGGER.info(f"Joining {thread.name}")
         thread.join()
 
-    # Copy config for record-keeping
-    shutil.copy("config.json", output_directory / "config.json")
-
     # Add any extra stats/metadata to output too
     end = time.time()
     duration_seconds = end - start
@@ -486,13 +555,31 @@ def main(
 
 
 if __name__ == "__main__":
-    main(
-        video_source=config("video_source"),
-        reader_sleep_seconds=config("reader_sleep_seconds"),
-        reader_flush_proportion=config("reader_flush_proportion"),
-        downscale_factor=config("downscale_factor"),
-        dilate_kernel_size=config("dilate_kernel_size"),
-        movement_threshold=config("movement_threshold"),
-        persist_factor=config("persist_factor"),
-        num_opencv_threads=config("num_opencv_threads"),
-    )
+    video_source=Path(config("video_source"))
+    downscale_factor=config("downscale_factor")
+    dilate_kernel_size=config("dilate_kernel_size")
+    movement_threshold=config("movement_threshold")
+    persist_factor=config("persist_factor")
+    
+    if video_source.is_dir():
+        video_source = list(video_source.iterdir())
+    elif type(video_source) is not list:
+        video_source = [video_source]
+
+    if type(downscale_factor) is not list:
+        downscale_factor = [downscale_factor]
+    if type(dilate_kernel_size) is not list:
+        dilate_kernel_size = [dilate_kernel_size]
+    if type(movement_threshold) is not list:
+        movement_threshold = [movement_threshold]
+    if type(persist_factor) is not list:
+        persist_factor = [persist_factor]
+
+    parameter_combos = product(video_source, downscale_factor, dilate_kernel_size, movement_threshold, persist_factor)
+    for combo in parameter_combos:
+        main(
+            **combo,
+            reader_sleep_seconds=config("reader_sleep_seconds"),
+            reader_flush_proportion=config("reader_flush_proportion"),
+            num_opencv_threads=config("num_opencv_threads"),
+        )
