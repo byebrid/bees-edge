@@ -21,10 +21,32 @@ LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.DEBUG)
 
 
-def config(key: str):
-    with open("config.json", "r") as f:
-        config_dict = json.load(f)
-        return config_dict[key]
+class Config:
+    def __init__(
+            self, 
+            video_source: str,
+            reader_sleep_seconds: float,
+            reader_flush_proportion: float,
+            downscale_factor: int,
+            dilate_kernel_size: int,
+            movement_threshold: int,
+            persist_factor: float,
+            num_opencv_threads: int,
+        ) -> None:
+        self.video_source = video_source
+        self.reader_sleep_seconds = reader_sleep_seconds
+        self.reader_flush_proportion = reader_flush_proportion
+        self.downscale_factor = downscale_factor
+        self.dilate_kernel_size = dilate_kernel_size
+        self.movement_threshold = movement_threshold
+        self.persist_factor = persist_factor
+        self.num_opencv_threads = num_opencv_threads
+
+
+with open("config.json", "r") as f:
+    __config_dict = json.load(f)
+    CONFIG = Config(**__config_dict)
+
 
 
 class LoggingThread(Thread):
@@ -434,19 +456,12 @@ class MotionDetector(LoggingThread):
 
 
 def main(
-    video_source: str,
-    reader_sleep_seconds: float,
-    reader_flush_proportion: float,
-    downscale_factor: int,
-    dilate_kernel_size: int,
-    movement_threshold: int,
-    persist_factor: float,
-    num_opencv_threads: int,
+    config: Config
 ):
     start = time.time()
 
     # Make sure opencv doesn't use too many threads and hog CPUs
-    cv2.setNumThreads(num_opencv_threads)
+    cv2.setNumThreads(config.num_opencv_threads)
 
     # Create queues for transferring data between threads (or processes)
     reading_queue = Queue(maxsize=512)
@@ -462,7 +477,10 @@ def main(
     output_filepath = str(output_directory / "motion001.avi")
 
     # Copy config for record-keeping
-    shutil.copy("config.json", output_directory / "config.json")
+    with open(output_directory / "config.json", "w") as f:
+        print(config.__dict__)
+        json.dump(config.__dict__, f)
+    # shutil.copy("config.json", output_directory / "config.json")
 
     # Create some handlers for logging output to both console and file
     console_handler = logging.StreamHandler()
@@ -476,25 +494,27 @@ def main(
     LOGGER.addHandler(console_handler)
     LOGGER.addHandler(file_handler)
 
+    LOGGER.info("Running main() with Config: ", config.__dict__)
+
     LOGGER.warning(f"Outputting to {output_filepath}")
 
     # Create all of our threads
     threads = (
         reader := Reader(
             reading_queue=reading_queue,
-            video_source=video_source,
+            video_source=config.video_source,
             stop_signal=stop_signal,
-            sleep_seconds=reader_sleep_seconds,
-            flush_proportion=reader_flush_proportion,
+            sleep_seconds=config.reader_sleep_seconds,
+            flush_proportion=config.reader_flush_proportion,
             logger=LOGGER,
         ),
         motion_detector := MotionDetector(
             input_queue=reading_queue,
             writing_queue=writing_queue,
-            downscale_factor=downscale_factor,
-            dilate_kernel_size=dilate_kernel_size,
-            movement_threshold=movement_threshold,
-            persist_factor=persist_factor,
+            downscale_factor=config.downscale_factor,
+            dilate_kernel_size=config.dilate_kernel_size,
+            movement_threshold=config.movement_threshold,
+            persist_factor=config.persist_factor,
             stop_signal=stop_signal,
             logger=LOGGER,
         ),
@@ -555,16 +575,16 @@ def main(
 
 
 if __name__ == "__main__":
-    video_source=Path(config("video_source"))
-    downscale_factor=config("downscale_factor")
-    dilate_kernel_size=config("dilate_kernel_size")
-    movement_threshold=config("movement_threshold")
-    persist_factor=config("persist_factor")
+    video_source=Path(CONFIG.video_source)
+    downscale_factor=CONFIG.downscale_factor
+    dilate_kernel_size=CONFIG.dilate_kernel_size
+    movement_threshold=CONFIG.movement_threshold
+    persist_factor=CONFIG.persist_factor
     
     if video_source.is_dir():
-        video_source = list(video_source.iterdir())
+        video_source = [str(v) for v in video_source.iterdir()]
     elif type(video_source) is not list:
-        video_source = [video_source]
+        video_source = [str(video_source)]
 
     if type(downscale_factor) is not list:
         downscale_factor = [downscale_factor]
@@ -576,10 +596,13 @@ if __name__ == "__main__":
         persist_factor = [persist_factor]
 
     parameter_combos = product(video_source, downscale_factor, dilate_kernel_size, movement_threshold, persist_factor)
+    parameter_keys = ["video_source", "downscale_factor", "dilate_kernel_size", "movement_threshold", "persist_factor"]
     for combo in parameter_combos:
-        main(
-            **combo,
-            reader_sleep_seconds=config("reader_sleep_seconds"),
-            reader_flush_proportion=config("reader_flush_proportion"),
-            num_opencv_threads=config("num_opencv_threads"),
-        )
+        this_config_dict = dict(zip(parameter_keys, combo))
+        this_config_dict.update({
+            "reader_sleep_seconds": CONFIG.reader_sleep_seconds,
+            "reader_flush_proportion": CONFIG.reader_flush_proportion,
+            "num_opencv_threads": CONFIG.num_opencv_threads,
+        })
+        this_config = Config(**this_config_dict)
+        main(this_config)
