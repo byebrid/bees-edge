@@ -23,16 +23,16 @@ LOGGER.setLevel(logging.DEBUG)
 
 class Config:
     def __init__(
-            self, 
-            video_source: str,
-            reader_sleep_seconds: float,
-            reader_flush_proportion: float,
-            downscale_factor: int,
-            dilate_kernel_size: int,
-            movement_threshold: int,
-            persist_factor: float,
-            num_opencv_threads: int,
-        ) -> None:
+        self,
+        video_source: str,
+        reader_sleep_seconds: float,
+        reader_flush_proportion: float,
+        downscale_factor: int,
+        dilate_kernel_size: int,
+        movement_threshold: int,
+        persist_factor: float,
+        num_opencv_threads: int,
+    ) -> None:
         self.video_source = video_source
         self.reader_sleep_seconds = reader_sleep_seconds
         self.reader_flush_proportion = reader_flush_proportion
@@ -46,7 +46,6 @@ class Config:
 with open("config.json", "r") as f:
     __config_dict = json.load(f)
     CONFIG = Config(**__config_dict)
-
 
 
 class LoggingThread(Thread):
@@ -71,7 +70,7 @@ class LoggingThread(Thread):
         """
         Sleeps for `sleep_seconds` seconds. Afterwards, if `queue` is completely
         empty, this implies that we slept for too long, in which case this will
-        return a number slightly *smaller* than `sleep_seconds` which should be 
+        return a number slightly *smaller* than `sleep_seconds` which should be
         used for the next sleep. If `queue` is still too full, then this will
         return a *larger* number. If `queue` is in sweet spot, then just returns
         the given `sleep_seconds`.
@@ -87,32 +86,40 @@ class LoggingThread(Thread):
         time.sleep(sleep_seconds)
         self.debug("WOKE UP!")
         qsize_after = queue.qsize()
-        
+
         lower_qsize = int(0.05 * queue.maxsize)
         ideal_qsize = int(0.10 * queue.maxsize)
         upper_qsize = int(0.15 * queue.maxsize)
-        
+
         # Best case, we don't need to adust sleep time
         if qsize_after >= lower_qsize and qsize_after <= upper_qsize:
-            LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; within range of {lower_qsize}-{upper_qsize}; sleep of {sleep_seconds} sec was ideal!")
+            LOGGER.debug(
+                f"Queue size: {qsize_before} -> {qsize_after}; within range of {lower_qsize}-{upper_qsize}; sleep of {sleep_seconds} sec was ideal!"
+            )
             return sleep_seconds
 
         # If queue size is *really* small, then reduce sleep by large amount
         if qsize_after <= 2:
             new_sleep_seconds = sleep_seconds * 0.90
-            LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec")
+            LOGGER.debug(
+                f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
+            )
             return new_sleep_seconds
 
         # Need to shorten sleep time if too many frames are drained
         if qsize_after < lower_qsize:
             new_sleep_seconds = sleep_seconds * 0.95
-            LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec")
+            LOGGER.debug(
+                f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
+            )
             return new_sleep_seconds
-        
+
         # Need to extend sleep time if too few frames are drained
         if qsize_after > upper_qsize:
             new_sleep_seconds = sleep_seconds * 1.05
-            LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; *above* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec")
+            LOGGER.debug(
+                f"Queue size: {qsize_before} -> {qsize_after}; *above* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
+            )
             return new_sleep_seconds
 
 
@@ -124,7 +131,7 @@ class Reader(LoggingThread):
         stop_signal: Event,
         sleep_seconds: int,
         flush_proportion: float,
-        logger: logging.Logger
+        logger: logging.Logger,
     ) -> None:
         super().__init__(name="ReaderThread", logger=logger)
 
@@ -164,7 +171,9 @@ class Reader(LoggingThread):
                 self.warning(
                     f"Queue filled up to threshold. Sleeping {self.sleep_seconds} seconds to make sure queue can be drained..."
                 )
-                self.sleep_seconds = self.smart_sleep(sleep_seconds=self.sleep_seconds, queue=self.reading_queue)
+                self.sleep_seconds = self.smart_sleep(
+                    sleep_seconds=self.sleep_seconds, queue=self.reading_queue
+                )
                 # time.sleep(self.sleep_seconds)
                 self.info(
                     f"Finished sleeping with {self.reading_queue.qsize()} frames still in buffer!"
@@ -215,7 +224,7 @@ class Writer(LoggingThread):
         frame_size: Tuple[int, int],
         fps: int,
         stop_signal: Event,
-        logger: logging.Logger
+        logger: logging.Logger,
     ) -> None:
         super().__init__(name="WriterThread", logger=logger)
 
@@ -238,7 +247,7 @@ class Writer(LoggingThread):
         writing_queue: Queue,
         filepath: str,
         stop_signal: Event,
-        logger: logging.Logger
+        logger: logging.Logger,
     ) -> Writer:
         fps = reader.get_fps()
         frame_size = reader.get_frame_size()
@@ -248,7 +257,7 @@ class Writer(LoggingThread):
             frame_size=frame_size,
             fps=fps,
             stop_signal=stop_signal,
-            logger=logger
+            logger=logger,
         )
         return writer
 
@@ -264,7 +273,10 @@ class Writer(LoggingThread):
         while loop_is_running:
             time.sleep(2)
 
-            if self.writing_queue.qsize() < self.flush_thresh and not self.stop_signal.is_set():
+            if (
+                self.writing_queue.qsize() < self.flush_thresh
+                and not self.stop_signal.is_set()
+            ):
                 continue
 
             self.info(
@@ -279,9 +291,7 @@ class Writer(LoggingThread):
                 try:
                     frame = self.writing_queue.get(timeout=10)
                 except Empty:
-                    self.warning(
-                        f"Waited too long for frame! Exiting..."
-                    )
+                    self.warning(f"Waited too long for frame! Exiting...")
                     loop_is_running = False
                     break
                 if frame is None:
@@ -301,7 +311,7 @@ class Ferry(LoggingThread):
         motion_input_queue: Queue,
         stop_signal: Event,
         sleep_seconds: int,
-        logger: logging.Logger
+        logger: logging.Logger,
     ) -> None:
         super().__init__(name="FerryThread", logger=logger)
 
@@ -355,7 +365,7 @@ class MotionDetector(LoggingThread):
         movement_threshold: int,
         persist_factor: float,
         stop_signal: Event,
-        logger: logging.Logger
+        logger: logging.Logger,
     ) -> None:
         super().__init__(name="MotionThread", logger=logger)
 
@@ -375,7 +385,9 @@ class MotionDetector(LoggingThread):
         self.persist_factor = persist_factor
 
         if self.downscale_factor != 1:
-            self.warning(f"Dilation kernel downscaled by {downscale_factor}x from {dilate_kernel_size} to {self.dilation_kernel.shape[0]}")
+            self.warning(
+                f"Dilation kernel downscaled by {downscale_factor}x from {dilate_kernel_size} to {self.dilation_kernel.shape[0]}"
+            )
 
     def run(self) -> None:
         self.prev_frame = None
@@ -444,9 +456,7 @@ class MotionDetector(LoggingThread):
         return motion_frame
 
 
-def main(
-    config: Config
-):
+def main(config: Config):
     start = time.time()
 
     # Make sure opencv doesn't use too many threads and hog CPUs
@@ -477,7 +487,9 @@ def main(
     console_handler.setFormatter(logging.Formatter("[%(threadName)-14s] %(msg)s"))
     file_handler = logging.FileHandler(filename=output_directory / "output.log")
     file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)-8s] [%(threadName)-14s] %(msg)s"))
+    file_handler.setFormatter(
+        logging.Formatter("[%(asctime)s] [%(levelname)-8s] [%(threadName)-14s] %(msg)s")
+    )
     # Make sure any prior handlers are removed
     LOGGER.handlers.clear()
     LOGGER.addHandler(console_handler)
@@ -561,16 +573,16 @@ def main(
 
 
 if __name__ == "__main__":
-    downscale_factor=CONFIG.downscale_factor
-    dilate_kernel_size=CONFIG.dilate_kernel_size
-    movement_threshold=CONFIG.movement_threshold
-    persist_factor=CONFIG.persist_factor
-    
+    downscale_factor = CONFIG.downscale_factor
+    dilate_kernel_size = CONFIG.dilate_kernel_size
+    movement_threshold = CONFIG.movement_threshold
+    persist_factor = CONFIG.persist_factor
+
     # Figure out if video is webcam index, single video file, or directory of
     # video files
-    video_source=CONFIG.video_source
+    video_source = CONFIG.video_source
     if type(video_source) != int:
-        video_source=Path(video_source)
+        video_source = Path(video_source)
         if video_source.is_dir():
             video_source = [str(v) for v in video_source.iterdir()]
         elif type(video_source) is not list:
@@ -588,14 +600,28 @@ if __name__ == "__main__":
     if type(persist_factor) is not list:
         persist_factor = [persist_factor]
 
-    parameter_combos = product(video_source, downscale_factor, dilate_kernel_size, movement_threshold, persist_factor)
-    parameter_keys = ["video_source", "downscale_factor", "dilate_kernel_size", "movement_threshold", "persist_factor"]
+    parameter_combos = product(
+        video_source,
+        downscale_factor,
+        dilate_kernel_size,
+        movement_threshold,
+        persist_factor,
+    )
+    parameter_keys = [
+        "video_source",
+        "downscale_factor",
+        "dilate_kernel_size",
+        "movement_threshold",
+        "persist_factor",
+    ]
     for combo in parameter_combos:
         this_config_dict = dict(zip(parameter_keys, combo))
-        this_config_dict.update({
-            "reader_sleep_seconds": CONFIG.reader_sleep_seconds,
-            "reader_flush_proportion": CONFIG.reader_flush_proportion,
-            "num_opencv_threads": CONFIG.num_opencv_threads,
-        })
+        this_config_dict.update(
+            {
+                "reader_sleep_seconds": CONFIG.reader_sleep_seconds,
+                "reader_flush_proportion": CONFIG.reader_flush_proportion,
+                "num_opencv_threads": CONFIG.num_opencv_threads,
+            }
+        )
         this_config = Config(**this_config_dict)
         main(this_config)
