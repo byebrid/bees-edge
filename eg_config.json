@@ -1,47 +1,10 @@
 {
-    "INPUT_SOURCE": 0,
-    "INPUT_WIDTH": null,
-    "INPUT_HEIGHT": null,
-    "SHOW": {
-        "Input": true,
-        "Movement": true,
-        "Color": true,
-        "Trail": true
-    },
-    "WRITE": {
-        "Input": false,
-        "Movement": true,
-        "Color": false,
-        "Trail": false
-    },
-    "OUTPUT_DIR": "out",
-    "OUTPUT_EXT": ".avi",
-    "QUEUE_SIZE": 200,
-    "FLUSH_THRESH": 50,
-    "FOURCC": "XVID",
-    "FRAME_SIZE": null,
-    "MOVEMENT_KWARGS": {
-        "THRESH": 40,
-        "PAD": 10,
-        "DILATE": null,
-        "MIN_AREA": 5
-    },
-    "COLOR_KWARGS": {
-        "THRESH": 60,
-        "PAD": 0,
-        "DILATE": null,
-        "MIN_AREA": 0,
-        "HSV_DICT": {
-            "LOW": {
-                "H": 25,
-                "S": 0,
-                "V": 0
-            },
-            "HIGH": {
-                "H": 35,
-                "S": 255,
-                "V": 255
-            }
-        }
-    }
+    "video_source": 0,
+    "reader_sleep_seconds": 5,
+    "reader_flush_proportion": 0.9,
+    "downscale_factor": 16,
+    "dilate_kernel_size": 63,
+    "movement_threshold": 40,
+    "persist_factor": 0,
+    "num_opencv_threads": 10
 }
