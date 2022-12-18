@@ -116,19 +116,6 @@ class LoggingThread(Thread):
             return new_sleep_seconds
 
 
-        # # Account for edge case where queue size is actually greater after 
-        # # sleeping? Guess this actually lets us work with queues in both directions,
-        # # so maybe not so weird!
-        # delta_qsize = max(0, qsize_after - qsize_before)
-        # if delta_qsize == 0:
-
-        # ideal_frames_removed = (qsize_before - ideal_qsize)
-        # current_removal_rate = sleep_seconds / delta_qsize
-        # ideal_sleep = current_removal_rate * ideal_frames_removed
-        # LOGGER.debug(f"Queue size: {qsize_before} -> {qsize_after}; outside of range of {lower_qsize}-{upper_qsize}; wanted {ideal_frames_removed} frames removed @ current rate of {current_removal_rate:.2f} sec/frame; adjusting sleep to {ideal_sleep} sec")
-        # return ideal_sleep
-
-
 class Reader(LoggingThread):
     def __init__(
         self,
@@ -445,6 +432,8 @@ class MotionDetector(LoggingThread):
 
         # Save downscaled frame for use in next iteration
         self.prev_frame = downscaled_frame
+        # Note that we don't save the thresholded diff here. Otherwise, movement
+        # could only persist across single frames at most, which is no good!
         self.prev_diff = diff
 
         # Return the final frame with only regions of "movement" included, everything
@@ -548,15 +537,12 @@ def main(
             ):
                 LOGGER.info(f"{queue_name} queue size: {queue.qsize()}")
         except (KeyboardInterrupt, Exception) as e:
-            LOGGER.error(
+            LOGGER.exception(
                 "Received KeyboardInterrupt or some kind of Exception. Setting interrupt event and breaking out of infinite loop...",
-                flush=True,
             )
             LOGGER.info(
                 "You may have to wait a minute for all child processes to gracefully exit!",
-                flush=True,
             )
-            LOGGER.exception()
             stop_signal.set()
             break
 
@@ -575,16 +561,23 @@ def main(
 
 
 if __name__ == "__main__":
-    video_source=Path(CONFIG.video_source)
     downscale_factor=CONFIG.downscale_factor
     dilate_kernel_size=CONFIG.dilate_kernel_size
     movement_threshold=CONFIG.movement_threshold
     persist_factor=CONFIG.persist_factor
     
-    if video_source.is_dir():
-        video_source = [str(v) for v in video_source.iterdir()]
-    elif type(video_source) is not list:
-        video_source = [str(video_source)]
+    # Figure out if video is webcam index, single video file, or directory of
+    # video files
+    video_source=CONFIG.video_source
+    if type(video_source) != int:
+        video_source=Path(video_source)
+        if video_source.is_dir():
+            video_source = [str(v) for v in video_source.iterdir()]
+        elif type(video_source) is not list:
+            video_source = [str(video_source)]
+    else:
+        # Just to make it iterable
+        video_source = [video_source]
 
     if type(downscale_factor) is not list:
         downscale_factor = [downscale_factor]
