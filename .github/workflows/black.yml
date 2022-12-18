@@ -1,23 +1,10 @@
 name: Black
 
-on: 
-  workflow_dispatch:
-  push:
+on: [push, pull_request]
 
 jobs:
-  build:
+  lint:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
-    - name: Install black
-      run: |
-        pip install --upgrade pip
-        pip install black
-    - name: Run black on codebase
-      run: |
-        black src/
+      - uses: actions/checkout@v2
+      - uses: psf/black@stable
