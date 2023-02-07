@@ -1,8 +1,18 @@
 name: bees-edge
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
 dependencies:
-  - python=3.10
-  - opencv=4.6
-  - numpy>=1.23
-  - tqdm=4.64
-  - pandas=1.4
-  - pip
+  - python=3.8
+  - pytorch::pytorch
+  - pytorch::torchvision
+  - pytorch::torchaudio 
+  - pytorch::pytorch-cuda=11.6
+  - opencv
+  - ipykernel
+  - ipywidgets
+  - tqdm
+  - pandas
+  - matplotlib
+  - libstdcxx-ng
