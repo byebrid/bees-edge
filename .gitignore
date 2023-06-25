@@ -1,6 +1,9 @@
 .vscode
 .envrc
 
+# Any weights files for pytorch model
+*.weights
+
 # Profiling outputs
 *.lprof
 profile-*.txt
