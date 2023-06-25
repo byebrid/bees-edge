@@ -14,6 +14,7 @@ from itertools import product
 
 import cv2
 import numpy as np
+import pandas as pd
 
 from fps import FPS
 
@@ -66,7 +67,7 @@ class LoggingThread(Thread):
     def error(self, msg, *args, **kwargs):
         self.logger.error(msg, *args, **kwargs)
 
-    def smart_sleep(self, sleep_seconds: int, queue: Queue) -> int:
+    def smart_sleep(self, sleep_seconds: int, queue: Queue) -> float:
         """
         Sleeps for `sleep_seconds` seconds. Afterwards, if `queue` is completely
         empty, this implies that we slept for too long, in which case this will
@@ -80,7 +81,7 @@ class LoggingThread(Thread):
 
 
         :param queue: queue whose throughput we want to optimise
-        :return: adjusted sleep time
+        :return: adjusted sleep time (in seconds)
         """
         qsize_before = queue.qsize()
         time.sleep(sleep_seconds)
@@ -100,7 +101,7 @@ class LoggingThread(Thread):
 
         # If queue size is *really* small, then reduce sleep by large amount
         if qsize_after <= 2:
-            new_sleep_seconds = sleep_seconds * 0.90
+            new_sleep_secondsss = sleep_seconds * 0.90
             LOGGER.debug(
                 f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
             )
@@ -221,6 +222,7 @@ class Writer(LoggingThread):
         self,
         writing_queue: Queue,
         filepath: str,
+        directory: Path,
         frame_size: Tuple[int, int],
         fps: int,
         stop_signal: Event,
@@ -230,6 +232,7 @@ class Writer(LoggingThread):
 
         self.writing_queue = writing_queue
         self.filepath = filepath
+        self.directory = directory
         self.frame_size = frame_size
         self.fps = fps
         self.stop_signal = stop_signal
@@ -240,12 +243,22 @@ class Writer(LoggingThread):
             f"Will flush buffer to output file every {self.flush_thresh} frames"
         )
 
+        self.frame_index = 0
+        self.df = pd.DataFrame(columns=["video_source", "image_fp", "frame_num", "x", "y", "width", "height"])
+        self.video_source = "example_videoname.avi"
+
+        self.buffer_len = 256
+        self.tile_index = 0
+        self.tile_buffer = np.zeros((self.buffer_len, 128, 128, 3), dtype=np.uint8)
+        self.buffer_file_count = 0
+
     @classmethod
     def from_reader(
         cls,
         reader: Reader,
         writing_queue: Queue,
         filepath: str,
+        directory: Path,
         stop_signal: Event,
         logger: logging.Logger,
     ) -> Writer:
@@ -254,6 +267,7 @@ class Writer(LoggingThread):
         writer = Writer(
             writing_queue=writing_queue,
             filepath=filepath,
+            directory=directory,
             frame_size=frame_size,
             fps=fps,
             stop_signal=stop_signal,
@@ -298,10 +312,94 @@ class Writer(LoggingThread):
                     loop_is_running = False
                     break
 
-                vw.write(frame)
+                # Find contours of 
+                self.find_moving_regions(frame)
+
+                if np.any(frame):
+                    cv2.putText(frame, f"Frame: {self.frame_index}", org=(40,40), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(0, 0, 255))
+                    vw.write(frame)
+
+                self.frame_index += 1
             self.info(f"Flushed {frames_to_flush} frames!")
 
+        print(self.df)
         vw.release()
+
+    def find_moving_regions(self, frame: np.ndarray):
+        # If frame is all black, no need to do anything!
+        if not np.any(frame):
+            return
+        
+        grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # _, thresh = cv2.threshold(grey, 1, 255, cv2.THRESH_BINARY)
+        # contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        
+        frame_height, frame_width = grey.shape
+        tile_width, tile_height = 128, 128
+        max_tile_x, max_tile_y = frame_width // tile_width, frame_height // tile_height
+        for tile_y in range(max_tile_y + 1):
+            y1 = tile_y * tile_height
+            y2 = y1 + tile_height
+            for tile_x in range(max_tile_x + 1):
+                x1 = tile_x * tile_width
+                x2 = x1 + tile_width
+                
+                tile = frame[y1:y2, x1:x2]
+                
+                # If this tile contains no movement, then ignore
+                if not np.any(tile):
+                    continue
+
+                # TODO: Pad borders if we need to (i.e. for largest tile_x, tile_y)
+                if tile.shape != (tile_height, tile_width, 3):
+                    # print("Padding tile")
+                    d_height = tile_height - tile.shape[0]
+                    d_width = tile_width - tile.shape[1]
+                    pad_width = ((0, d_height), (0, d_width), (0, 0))
+                    tile = np.pad(tile, pad_width=pad_width, mode="constant", constant_values=0)
+
+                self.tile_buffer[self.tile_index] = tile
+                self.tile_index += 1
+                if self.tile_index >= self.buffer_len:
+                    LOGGER.info("Dumping tile buffer...")
+                    buffer_height = buffer_width = int(np.sqrt(self.buffer_len))
+                    tile_buffer = self.tile_buffer.reshape((16, 16, 128, 128, 3)).reshape((-1, 128, 3))
+
+                    # tile_buffer = np.reshape(self.tile_buffer, (tile_height * buffer_height, tile_width*buffer_width, 3))
+                    # tile_buffer = np.reshape(self.tile_buffer, (-1, tile_width, 3))
+                    image_fp = Path(self.directory) / f"chunk_{self.buffer_file_count}.png"
+                    cv2.imwrite(str(image_fp), tile_buffer)
+                    
+                    # Reset buffer
+                    self.tile_index = 0
+                    self.tile_buffer[...] = 0
+                    self.buffer_file_count += 1
+
+                # For the moment, even if there is just the tiniest bit of movement in tile,
+                # save it!
+                # centre_x = (x1 + x2) // 2
+                # centre_y = (y1 + y2) // 2
+                image_fp = Path(self.directory) / f"{self.video_source}_{self.frame_index}_{x1}_{y1}_{tile_width}_{tile_height}.png"
+                # cv2.imwrite(str(image_fp), tile)
+                self.df.loc[len(self.df.index)] = {
+                    "video_source": self.video_source,
+                    "image_fp": str(image_fp),
+                    "frame_num": self.frame_index,
+                    "x": x1,
+                    "y": y1,
+                    "width": tile_width,
+                    "height": tile_height
+                }
+            
+
+        # for contour in contours:
+        #     rect = cv2.boundingRect(contour)
+        #     x1, y1, width, height = rect
+        #     x2, y2 = x1 + width, y1 + height
+            
+
+        # if len(contours) > 1:
+        #     print("We're here!")
 
 
 class Ferry(LoggingThread):
@@ -523,6 +621,7 @@ def main(config: Config):
             reader=reader,
             writing_queue=writing_queue,
             filepath=output_filepath,
+            directory=output_directory,
             stop_signal=stop_signal,
             logger=LOGGER,
         ),
