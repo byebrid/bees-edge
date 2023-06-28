@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +20,7 @@ LOGGER.setLevel(logging.DEBUG)
 
 
 class Config:
+    """Configuration class just to provide better parameter hints in code editor."""
     def __init__(
         self,
         video_source: str,
@@ -43,12 +42,14 @@ class Config:
         self.num_opencv_threads = num_opencv_threads
 
 
+# Create Config object from JSON file
 with open("config.json", "r") as f:
     __config_dict = json.load(f)
     CONFIG = Config(**__config_dict)
 
 
 class LoggingThread(Thread):
+    """A wrapper around `threading.Thread` with convenience methods for logging."""
     def __init__(self, name: str, logger: logging.Logger) -> None:
         super().__init__(name=name)
 
@@ -66,64 +67,26 @@ class LoggingThread(Thread):
     def error(self, msg, *args, **kwargs):
         self.logger.error(msg, *args, **kwargs)
 
-    def smart_sleep(self, sleep_seconds: int, queue: Queue) -> int:
-        """
-        Sleeps for `sleep_seconds` seconds. Afterwards, if `queue` is completely
-        empty, this implies that we slept for too long, in which case this will
-        return a number slightly *smaller* than `sleep_seconds` which should be
-        used for the next sleep. If `queue` is still too full, then this will
-        return a *larger* number. If `queue` is in sweet spot, then just returns
-        the given `sleep_seconds`.
-
-        This will never return a negative number (so long as you don't provide it
-        with a negative number).
-
-
-        :param queue: queue whose throughput we want to optimise
-        :return: adjusted sleep time
-        """
-        qsize_before = queue.qsize()
-        time.sleep(sleep_seconds)
-        self.debug("WOKE UP!")
-        qsize_after = queue.qsize()
-
-        lower_qsize = int(0.05 * queue.maxsize)
-        ideal_qsize = int(0.10 * queue.maxsize)
-        upper_qsize = int(0.15 * queue.maxsize)
-
-        # Best case, we don't need to adust sleep time
-        if qsize_after >= lower_qsize and qsize_after <= upper_qsize:
-            LOGGER.debug(
-                f"Queue size: {qsize_before} -> {qsize_after}; within range of {lower_qsize}-{upper_qsize}; sleep of {sleep_seconds} sec was ideal!"
-            )
-            return sleep_seconds
-
-        # If queue size is *really* small, then reduce sleep by large amount
-        if qsize_after <= 2:
-            new_sleep_seconds = sleep_seconds * 0.90
-            LOGGER.debug(
-                f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
-            )
-            return new_sleep_seconds
-
-        # Need to shorten sleep time if too many frames are drained
-        if qsize_after < lower_qsize:
-            new_sleep_seconds = sleep_seconds * 0.95
-            LOGGER.debug(
-                f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
-            )
-            return new_sleep_seconds
-
-        # Need to extend sleep time if too few frames are drained
-        if qsize_after > upper_qsize:
-            new_sleep_seconds = sleep_seconds * 1.05
-            LOGGER.debug(
-                f"Queue size: {qsize_before} -> {qsize_after}; *above* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
-            )
-            return new_sleep_seconds
-
 
 class Reader(LoggingThread):
+    """A class to read video from either a file or camera, and push to a queue.
+    
+    Reads video from file or camera and pushes each frame onto a queue. Note that
+    this queue *must* be emptied before the the program can be closed, meaning
+    every frame in this queue needs to be handled by some other thread, either
+    with some actual processing or just popping those frames and doing nothing 
+    with them.
+
+    This Reader includes "smart sleeping". This is intended for use with video 
+    files, where there is no real upper bound on the rate at which we read frames
+    (as opposed to a live camera feed, where you'll be bounded by its FPS). For 
+    files, this Reader can read frames much more quickly than they can be 
+    processed, meaning the reading queue can fill up and start blocking this 
+    reading thread when it tries to push frames onto the full queue (and this 
+    blocking still uses the CPU meaning it's a waste of compute time!). We 
+    therefore let this thread sleep for a while once its queue fills above some
+    threshold (e.g. ~90%).
+    """
     def __init__(
         self,
         reading_queue: Queue,
@@ -133,6 +96,30 @@ class Reader(LoggingThread):
         flush_proportion: float,
         logger: logging.Logger,
     ) -> None:
+        """Initialise Reader with given queue and video source.
+
+        Parameters
+        ----------
+        reading_queue : Queue
+            The queue to push video frames onto.
+        video_source : Union[str, int]
+            A string representing a video file's filepath, or a non-negative 
+            integer index for an attached camera device. 0 is usually your 
+            laptop/rapsberry pi's in-built webcam, but this will depend on the 
+            hardware you're using.
+        stop_signal : Event
+            A threading Event that this Reader queries to know when to stop. 
+            This is used for graceful termination of the multithreaded program.
+        sleep_seconds : int
+            *Initial* time to sleep. This sleep time will be dynamically updated
+            according to smart sleep.
+        flush_proportion : float
+            When the queue fills above this proportion, trigger the sleeping to
+            let other thread drain the queue. This prevents blocking when the
+            queue becomes full. Recommended to be relatively high, e.g. 0.9.
+        logger : logging.Logger
+            Logger to use for logging key info, warnings, etc.
+        """
         super().__init__(name="ReaderThread", logger=logger)
 
         self.reading_queue = reading_queue
@@ -156,7 +143,7 @@ class Reader(LoggingThread):
     def run(self) -> None:
         while True:
             if self.stop_signal.is_set():
-                self.warning("Received stop signal")
+                self.info("Received stop signal")
                 break
 
             grabbed, frame = self.vc.read()
@@ -168,14 +155,13 @@ class Reader(LoggingThread):
             # will lose the next `self.sleep_seconds` seconds of footage, but is
             # fine if working with video files as input
             if self.reading_queue.qsize() >= self.flush_thresh:
-                self.warning(
+                self.debug(
                     f"Queue filled up to threshold. Sleeping {self.sleep_seconds} seconds to make sure queue can be drained..."
                 )
                 self.sleep_seconds = self.smart_sleep(
                     sleep_seconds=self.sleep_seconds, queue=self.reading_queue
                 )
-                # time.sleep(self.sleep_seconds)
-                self.info(
+                self.debug(
                     f"Finished sleeping with {self.reading_queue.qsize()} frames still in buffer!"
                 )
 
@@ -214,6 +200,60 @@ class Reader(LoggingThread):
             raise ValueError(
                 "`source` must be a filepath to a video, or an integer index for the camera"
             )
+        
+    def smart_sleep(self, sleep_seconds: int, queue: Queue) -> int:
+        """
+        Sleeps for `sleep_seconds` seconds. Afterwards, if `queue` is completely
+        empty, this implies that we slept for too long, in which case this will
+        return a number slightly *smaller* than `sleep_seconds` which should be
+        used for the next sleep. If `queue` is still too full, then this will
+        return a *larger* number. If `queue` is in sweet spot, then just returns
+        the given `sleep_seconds`.
+
+        This will never return a negative number (so long as you don't provide it
+        with a negative number).
+
+        :param queue: queue whose throughput we want to optimise
+        :return: adjusted sleep time
+        """
+        qsize_before = queue.qsize()
+        time.sleep(sleep_seconds)
+        self.debug("WOKE UP!")
+        qsize_after = queue.qsize()
+
+        lower_qsize = int(0.05 * queue.maxsize)
+        upper_qsize = int(0.15 * queue.maxsize)
+
+        # Best case, we don't need to adust sleep time
+        if qsize_after >= lower_qsize and qsize_after <= upper_qsize:
+            LOGGER.debug(
+                f"Queue size: {qsize_before} -> {qsize_after}; within range of {lower_qsize}-{upper_qsize}; sleep of {sleep_seconds} sec was ideal!"
+            )
+            return sleep_seconds
+
+        # If queue size is *really* small, then reduce sleep by large amount
+        if qsize_after <= 2:
+            new_sleep_seconds = sleep_seconds * 0.90
+            LOGGER.debug(
+                f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
+            )
+            return new_sleep_seconds
+
+        # Need to shorten sleep time if too many frames are drained
+        if qsize_after < lower_qsize:
+            new_sleep_seconds = sleep_seconds * 0.95
+            LOGGER.debug(
+                f"Queue size: {qsize_before} -> {qsize_after}; *below* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
+            )
+            return new_sleep_seconds
+
+        # Need to extend sleep time if too few frames are drained
+        if qsize_after > upper_qsize:
+            new_sleep_seconds = sleep_seconds * 1.05
+            LOGGER.debug(
+                f"Queue size: {qsize_before} -> {qsize_after}; *above* range of {lower_qsize}-{upper_qsize}; adjusting sleep to {new_sleep_seconds:.2f} sec"
+            )
+            return new_sleep_seconds
 
 
 class Writer(LoggingThread):
@@ -236,9 +276,11 @@ class Writer(LoggingThread):
 
         self.fourcc = cv2.VideoWriter_fourcc(*"XVID")
         self.flush_thresh = int(0.75 * writing_queue.maxsize)
-        self.warning(
+        self.info(
             f"Will flush buffer to output file every {self.flush_thresh} frames"
         )
+
+        self.frame_count = 0
 
     @classmethod
     def from_reader(
@@ -249,6 +291,32 @@ class Writer(LoggingThread):
         stop_signal: Event,
         logger: logging.Logger,
     ) -> Writer:
+        """Convenience method to generate a Writer from a Reader.
+
+        This is useful because the Writer should share the FPS and resolution
+        of the input video as determined by the Reader. This just saves you
+        having to parse those attributes yourself.
+
+        Parameters
+        ----------
+        reader : Reader
+            Reader whose 
+        writing_queue : Queue
+            Queue to retrieve video frames from. Some other thread should be 
+            putting these frames into this queue for this Writer to retrieve.
+        filepath : str
+            Filepath for output video file.
+        stop_signal : Event
+            A threading Event that this Reader queries to know when to stop. 
+            This is used for graceful termination of the multithreaded program.
+        logger : logging.Logger
+            Logger to use for logging key info, warnings, etc.
+
+        Returns
+        -------
+        Writer
+            Writer with same FPS and frame size as given Reader.
+        """
         fps = reader.get_fps()
         frame_size = reader.get_frame_size()
         writer = Writer(
@@ -279,13 +347,13 @@ class Writer(LoggingThread):
             ):
                 continue
 
-            self.info(
+            self.debug(
                 f"Queue size exceeded ({self.writing_queue.qsize() >= self.flush_thresh}) OR stop signal ({self.stop_signal.is_set()})"
             )
 
             # Only flush the threshold number of frames, OR remaining frames if there are only a few left
             frames_to_flush = min(self.writing_queue.qsize(), self.flush_thresh)
-            self.info(f"Flushing {frames_to_flush} frames...")
+            self.debug(f"Flushing {frames_to_flush} frames...")
 
             for i in range(frames_to_flush):
                 try:
@@ -299,60 +367,13 @@ class Writer(LoggingThread):
                     break
 
                 vw.write(frame)
-            self.info(f"Flushed {frames_to_flush} frames!")
+                self.frame_count += 1
+
+                if self.frame_count % 1000 == 0:
+                    self.info(f"Written {self.frame_count} frames so far")
+            self.debug(f"Flushed {frames_to_flush} frames!")
 
         vw.release()
-
-
-class Ferry(LoggingThread):
-    def __init__(
-        self,
-        reading_queue: Queue,
-        motion_input_queue: Queue,
-        stop_signal: Event,
-        sleep_seconds: int,
-        logger: logging.Logger,
-    ) -> None:
-        super().__init__(name="FerryThread", logger=logger)
-
-        self.reading_queue = reading_queue
-        self.motion_input_queue = motion_input_queue
-        self.stop_signal = stop_signal
-        self.sleep_seconds = sleep_seconds
-
-    def run(self) -> None:
-        fps = FPS()
-        fps.tick()
-        i = 1
-
-        flush_thresh = int(0.9 * self.motion_input_queue.maxsize)
-        while True:
-            try:
-                frame = self.reading_queue.get(timeout=5)
-                fps.tick()
-            except Empty:
-                self.warning(
-                    "Timed out waiting for frame from reading queue! Perhaps consider changing how long the Reader sleeps for?"
-                )
-                continue
-
-            if self.motion_input_queue.qsize() >= flush_thresh:
-                self.warning(
-                    f"    WARNING - Sleeping for {self.sleep_seconds} seconds to let MotionDetector clear its queue..."
-                )
-                time.sleep(self.sleep_seconds)
-                self.info("Finished sleeping!")
-
-            self.motion_input_queue.put(frame)
-
-            if frame is None:
-                return
-
-            if i % 1000 == 0:
-                self.info(f"handled frame#{i}")
-                self.warning(f"FPS = {fps.get_average()}")
-
-            i += 1
 
 
 class MotionDetector(LoggingThread):
@@ -385,7 +406,7 @@ class MotionDetector(LoggingThread):
         self.persist_factor = persist_factor
 
         if self.downscale_factor != 1:
-            self.warning(
+            self.info(
                 f"Dilation kernel downscaled by {downscale_factor}x from {dilate_kernel_size} to {self.dilation_kernel.shape[0]}"
             )
 
@@ -414,7 +435,11 @@ class MotionDetector(LoggingThread):
         # Downscale input frame
         orig_shape = frame.shape
 
-        downscaled_frame = cv2.resize(frame, dsize=None, fx=self.fx, fy=self.fy)
+        if self.downscale_factor == 1:
+            # Downscale factor of 1 really just means no downscaling at all
+            downscaled_frame = frame
+        else:
+            downscaled_frame = cv2.resize(frame, dsize=None, fx=self.fx, fy=self.fy)
 
         if self.prev_frame is None:
             self.prev_frame = downscaled_frame
@@ -437,7 +462,8 @@ class MotionDetector(LoggingThread):
         mask = cv2.dilate(threshed_diff, kernel=self.dilation_kernel)
 
         # Up-res the final mask (note opencv expects opposite order of dimensions because of course it does)
-        mask = cv2.resize(mask, dsize=(orig_shape[1], orig_shape[0]))
+        if self.downscale_factor != 1:
+            mask = cv2.resize(mask, dsize=(orig_shape[1], orig_shape[0]))
 
         # Convert to boolean so we can actually use it as a mask now
         mask = mask.astype(bool)
@@ -468,7 +494,6 @@ def main(config: Config):
     writing_queue = Queue(maxsize=512)
 
     stop_signal = Event()
-    pause_reading_signal = Event()
 
     # Figure out output filepath for this particular run
     output_directory = Path(f"out/{datetime.now()}")
@@ -479,11 +504,10 @@ def main(config: Config):
     with open(output_directory / "config.json", "w") as f:
         print(config.__dict__)
         json.dump(config.__dict__, f)
-    # shutil.copy("config.json", output_directory / "config.json")
 
     # Create some handlers for logging output to both console and file
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.WARNING)
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(logging.Formatter("[%(threadName)-14s] %(msg)s"))
     file_handler = logging.FileHandler(filename=output_directory / "output.log")
     file_handler.setLevel(logging.DEBUG)
@@ -496,8 +520,7 @@ def main(config: Config):
     LOGGER.addHandler(file_handler)
 
     LOGGER.info("Running main() with Config: ", config.__dict__)
-
-    LOGGER.warning(f"Outputting to {output_filepath}")
+    LOGGER.info(f"Outputting to {output_filepath}")
 
     # Create all of our threads
     threads = (
@@ -538,7 +561,7 @@ def main(config: Config):
         try:
             time.sleep(5)
             if not any([thread.is_alive() for thread in threads]):
-                LOGGER.warning(
+                LOGGER.info(
                     "All child processes appear to have finished! Exiting infinite loop..."
                 )
                 break
@@ -547,12 +570,12 @@ def main(config: Config):
                 [reading_queue, motion_input_queue, writing_queue],
                 ["Reading", "Motion", "Writing"],
             ):
-                LOGGER.info(f"{queue_name} queue size: {queue.qsize()}")
+                LOGGER.debug(f"{queue_name} queue size: {queue.qsize()}")
         except (KeyboardInterrupt, Exception) as e:
             LOGGER.exception(
                 "Received KeyboardInterrupt or some kind of Exception. Setting interrupt event and breaking out of infinite loop...",
             )
-            LOGGER.info(
+            LOGGER.warning(
                 "You may have to wait a minute for all child processes to gracefully exit!",
             )
             stop_signal.set()
