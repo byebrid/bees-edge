@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import time
@@ -336,6 +337,9 @@ class Writer(LoggingThread):
             fps=self.fps,
             frameSize=self.frame_size,
         )
+        
+        omitted_frames = []
+        currently_omitting = False
 
         loop_is_running = True
         while loop_is_running:
@@ -366,7 +370,18 @@ class Writer(LoggingThread):
                     loop_is_running = False
                     break
 
-                vw.write(frame)
+                # Ignore frames that have *zero* movement in them
+                if np.any(frame):
+                    vw.write(frame)
+                    if currently_omitting:
+                        # Append *end* of all-black interval to list
+                        currently_omitting = False
+                        omitted_frames.append(self.frame_count)
+                elif not currently_omitting:
+                    # Append *start* of all-black interval to list
+                    currently_omitting = True
+                    omitted_frames.append(self.frame_count)
+                
                 self.frame_count += 1
 
                 if self.frame_count % 1000 == 0:
@@ -374,6 +389,15 @@ class Writer(LoggingThread):
             self.debug(f"Flushed {frames_to_flush} frames!")
 
         vw.release()
+
+        # Write CSV file with omitted frame indices. Note this is not the most
+        # space-efficient way to store these, but it's probs good enough
+        output_dir = Path(self.filepath).parent
+        csv_filepath = output_dir / "omitted_frames.csv"
+        with open(csv_filepath, "w") as f:
+            csv_writer = csv.writer(f)
+            csv_writer.writerow(omitted_frames)  
+
 
 
 class MotionDetector(LoggingThread):
@@ -426,10 +450,7 @@ class MotionDetector(LoggingThread):
                 break
 
             motion_detected_frame = self.detect_motion(frame=frame)
-
-            # Ignore frames that have *zero* movement in them
-            if np.any(motion_detected_frame):
-                self.writing_queue.put(motion_detected_frame)
+            self.writing_queue.put(motion_detected_frame)
 
         # Make sure motion writer knows to stop
         self.writing_queue.put(None)
