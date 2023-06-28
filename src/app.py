@@ -426,7 +426,10 @@ class MotionDetector(LoggingThread):
                 break
 
             motion_detected_frame = self.detect_motion(frame=frame)
-            self.writing_queue.put(motion_detected_frame)
+
+            # Ignore frames that have *zero* movement in them
+            if np.any(motion_detected_frame):
+                self.writing_queue.put(motion_detected_frame)
 
         # Make sure motion writer knows to stop
         self.writing_queue.put(None)
