@@ -370,17 +370,19 @@ class Writer(LoggingThread):
                     loop_is_running = False
                     break
 
-                # Ignore frames that have *zero* movement in them
-                if np.any(frame):
-                    vw.write(frame)
-                    if currently_omitting:
-                        # Append *end* of all-black interval to list
-                        currently_omitting = False
-                        omitted_frames.append(self.frame_count)
-                elif not currently_omitting:
-                    # Append *start* of all-black interval to list
-                    currently_omitting = True
-                    omitted_frames.append(self.frame_count)
+                vw.write(frame)
+                # TODO: Re-add the frame omission, only commenting it out for downscaling experiment
+                # # Ignore frames that have *zero* movement in them
+                # if np.any(frame):
+                #     vw.write(frame)
+                #     if currently_omitting:
+                #         # Append *end* of all-black interval to list
+                #         currently_omitting = False
+                #         omitted_frames.append(self.frame_count)
+                # elif not currently_omitting:
+                #     # Append *start* of all-black interval to list
+                #     currently_omitting = True
+                #     omitted_frames.append(self.frame_count)
                 
                 self.frame_count += 1
 
@@ -390,14 +392,14 @@ class Writer(LoggingThread):
 
         vw.release()
 
-        # Write CSV file with omitted frame indices. Note this is not the most
-        # space-efficient way to store these, but it's probs good enough
-        output_dir = Path(self.filepath).parent
-        csv_filepath = output_dir / "omitted_frames.csv"
-        with open(csv_filepath, "w") as f:
-            csv_writer = csv.writer(f)
-            csv_writer.writerow(omitted_frames)  
-
+        # TODO: Re-add the frame omission, only commenting it out for downscaling experiment
+        # # Write CSV file with omitted frame indices. Note this is not the most
+        # # space-efficient way to store these, but it's probs good enough
+        # output_dir = Path(self.filepath).parent
+        # csv_filepath = output_dir / "omitted_frames.csv"
+        # with open(csv_filepath, "w") as f:
+        #     csv_writer = csv.writer(f)
+        #     csv_writer.writerow(omitted_frames)  
 
 
 class MotionDetector(LoggingThread):
@@ -463,12 +465,14 @@ class MotionDetector(LoggingThread):
             # Downscale factor of 1 really just means no downscaling at all
             downscaled_frame = frame
         else:
-            downscaled_frame = cv2.resize(frame, dsize=None, fx=self.fx, fy=self.fy)
+            downscaled_frame = self.downscale(frame)
+            # downscaled_frame = cv2.resize(frame, dsize=None, fx=self.fx, fy=self.fy)
 
         if self.prev_frame is None:
             self.prev_frame = downscaled_frame
         if self.prev_diff is None:
-            self.prev_diff = np.zeros(self.prev_frame.shape, dtype=np.uint8)
+            self.prev_diff = self.downscale(frame)
+            # self.prev_diff = np.zeros(self.prev_frame.shape, dtype=np.uint8)
 
         # Compute pixel difference between consecutive frames (note this still has 3 channels)
         # Note that previous frame was already downscaled!
@@ -504,6 +508,10 @@ class MotionDetector(LoggingThread):
         motion_frame[mask] = frame[mask]
 
         return motion_frame
+    
+    def downscale(self, frame: np.ndarray) -> np.ndarray:
+        d = self.downscale_factor
+        return frame[::d, ::d] # Sample every d'th column and row
 
 
 def main(config: Config):
