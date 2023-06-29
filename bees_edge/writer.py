@@ -5,11 +5,11 @@ from queue import Empty, Queue
 from threading import Event
 import time
 from typing import Tuple
-from logging_thread import LoggingThread
 
 import cv2
 
-from reader import Reader
+from bees_edge.logging_thread import LoggingThread
+from bees_edge.reader import Reader
 
 
 class Writer(LoggingThread):
@@ -21,6 +21,7 @@ class Writer(LoggingThread):
         fps: int,
         stop_signal: Event,
         logger: Logger,
+        sleep_seconds: float = 0.1,
     ) -> None:
         super().__init__(name="WriterThread", logger=logger)
 
@@ -29,6 +30,9 @@ class Writer(LoggingThread):
         self.frame_size = frame_size
         self.fps = fps
         self.stop_signal = stop_signal
+
+        # For smart sleep every iteration
+        self.sleep_seconds = sleep_seconds
 
         self.fourcc = cv2.VideoWriter_fourcc(*"XVID")
         self.flush_thresh = int(0.75 * writing_queue.maxsize)
@@ -45,7 +49,7 @@ class Writer(LoggingThread):
         writing_queue: Queue,
         filepath: str,
         stop_signal: Event,
-        logger: Logger,
+        logger: Logger
     ) -> Writer:
         """Convenience method to generate a Writer from a Reader.
 
@@ -98,20 +102,11 @@ class Writer(LoggingThread):
 
         loop_is_running = True
         while loop_is_running:
-            time.sleep(2)
-
-            if (
-                self.writing_queue.qsize() < self.flush_thresh
-                and not self.stop_signal.is_set()
-            ):
-                continue
-
-            self.debug(
-                f"Queue size exceeded ({self.writing_queue.qsize() >= self.flush_thresh}) OR stop signal ({self.stop_signal.is_set()})"
-            )
+            self.smart_sleep()
 
             # Only flush the threshold number of frames, OR remaining frames if there are only a few left
-            frames_to_flush = min(self.writing_queue.qsize(), self.flush_thresh)
+            flush_thresh = int(0.65 * self.writing_queue.maxsize)
+            frames_to_flush = min(self.writing_queue.qsize(), flush_thresh)
             self.debug(f"Flushing {frames_to_flush} frames...")
 
             for i in range(frames_to_flush):
@@ -154,4 +149,47 @@ class Writer(LoggingThread):
         # csv_filepath = output_dir / "omitted_frames.csv"
         # with open(csv_filepath, "w") as f:
         #     csv_writer = csv.writer(f)
-        #     csv_writer.writerow(omitted_frames)  
+        #     csv_writer.writerow(omitted_frames)
+
+    def smart_sleep(self):
+        time.sleep(self.sleep_seconds)
+
+        # If we're stopping, don't change sleep time since we want to flush whatever's
+        # left in queue, which may not be very many frames (and we don't want to
+        # extend sleep time at very end of program!)
+        if self.stop_signal.is_set():
+            return
+
+        # Define boundaries for very bad, sort of bad, and good queue sizes
+        very_lower = int(0.10 * self.writing_queue.maxsize)
+        lower = int(0.25 * self.writing_queue.maxsize)
+        upper = int(0.75 * self.writing_queue.maxsize)
+        very_upper = int(0.90 * self.writing_queue.maxsize)
+        
+        # Multipliers to extend/shorten sleep if queue not in sweet zone
+        sleep_longer_multiplier = 1.05
+        sleep_shorter_multiplier = 0.93 # Intentionally not exact reciprocal so we can get arbitrary sleep time
+        # Extra multiplier for extreme edge cases
+        exaggerate_factor = 1.1
+
+        qsize = self.writing_queue.qsize()
+
+        if lower <= qsize <= upper:
+            return
+        
+        if qsize < lower:
+            multiplier = sleep_longer_multiplier
+
+            if qsize < very_lower:
+                multiplier *= exaggerate_factor
+                self.debug(f"Exaggerating sleep duration multiplier by x{exaggerate_factor} due to *very* empty queue")    
+        elif qsize > upper:
+            multiplier = sleep_shorter_multiplier
+
+            if qsize > very_upper:
+                multiplier /= exaggerate_factor
+                self.debug(f"Exaggerating sleep duration multiplier by ÷{exaggerate_factor} due to *very* full queue")    
+            
+        new_sleep = self.sleep_seconds * multiplier
+        self.debug(f"Sleep = {self.sleep_seconds:.4f} -> {new_sleep:.4f} (x{multiplier:.3f})")
+        self.sleep_seconds = new_sleep

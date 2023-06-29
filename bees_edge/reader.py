@@ -1,4 +1,3 @@
-from logging_thread import LoggingThread
 from threading import Event
 from queue import Queue
 from typing import Union, Tuple
@@ -6,6 +5,8 @@ from logging import Logger
 import time
 
 import cv2
+
+from bees_edge.logging_thread import LoggingThread
 
 
 class Reader(LoggingThread):

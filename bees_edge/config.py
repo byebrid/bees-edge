@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 
 
-LOGGER = logging.getLogger("BeesEdgeLogger")
-LOGGER.setLevel(logging.DEBUG)
+# LOGGER = logging.getLogger("BeesEdgeLogger")
+# LOGGER.setLevel(logging.DEBUG)
 
 
 class Config:

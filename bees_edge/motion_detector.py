@@ -1,5 +1,3 @@
-
-
 from logging import Logger
 from queue import Empty, Queue
 from threading import Event
@@ -7,7 +5,7 @@ from threading import Event
 import cv2
 import numpy as np
 
-from logging_thread import LoggingThread
+from bees_edge.logging_thread import LoggingThread
 
 
 class MotionDetector(LoggingThread):

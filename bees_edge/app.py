@@ -10,13 +10,20 @@ from threading import Event
 
 import cv2
 
-from config import Config, LOGGER
-from motion_detector import MotionDetector
-from reader import Reader
-from writer import Writer
+# Hate doing this, but simplest way to let python import sibling directories without
+# actually installing this repo as a package
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from bees_edge.config import Config
+from bees_edge.logger import get_logger
+from bees_edge.motion_detector import MotionDetector
+from bees_edge.reader import Reader
+from bees_edge.writer import Writer
 
 
-def main_loop(config: Config, output_directory: Path):
+def main_loop(config: Config, output_directory: Path, LOGGER: logging.Logger):
     # Create queues for transferring data between threads (or processes)
     reading_queue = Queue(maxsize=512)
     motion_input_queue = Queue(maxsize=512)
@@ -90,33 +97,18 @@ def main_loop(config: Config, output_directory: Path):
         thread.join()
 
 
-def prepare_logging_handlers(output_directory: Path):
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter("[%(threadName)-14s] %(msg)s"))
-    file_handler = logging.FileHandler(filename=output_directory / "output.log")
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(
-        logging.Formatter("[%(asctime)s] [%(levelname)-8s] [%(threadName)-14s] %(msg)s")
-    )
-    # Make sure any prior handlers are removed
-    LOGGER.handlers.clear()
-    LOGGER.addHandler(console_handler)
-    LOGGER.addHandler(file_handler)
-
-
 def main(config: Config):
     # Figure out output filepath for this particular run
     output_directory = Path(f"out/{datetime.now()}")
     output_directory.mkdir()
 
     # Create some handlers for logging output to both console and file
-    prepare_logging_handlers(output_directory=output_directory)
+    LOGGER = get_logger(output_directory=output_directory)
     
     # Save start time to measure duration at end of run
     start = time.time()
 
-    LOGGER.info("Running main() with Config: ", config)
+    LOGGER.info(f"Running main() with Config: {config}")
     LOGGER.info(f"Outputting to {output_directory}")
 
     # Make sure opencv doesn't use too many threads and hog CPUs
@@ -126,7 +118,7 @@ def main(config: Config):
     config.to_json_file(output_directory / "config.json")
 
     # Run main loop for this config     
-    main_loop(config=config, output_directory=output_directory)
+    main_loop(config=config, output_directory=output_directory, LOGGER=LOGGER)
 
     # Add any extra stats/metadata to output too
     end = time.time()
