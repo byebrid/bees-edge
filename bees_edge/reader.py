@@ -36,6 +36,7 @@ class Reader(LoggingThread):
         sleep_seconds: int,
         flush_proportion: float,
         logger: Logger,
+        sleeping_disabled: bool = False # Temporary parameter to test sleeping vs not sleeping
     ) -> None:
         """Initialise Reader with given queue and video source.
 
@@ -67,6 +68,7 @@ class Reader(LoggingThread):
         self.video_source = video_source
         self.stop_signal = stop_signal
         self.sleep_seconds = sleep_seconds
+        self.sleeping_disabled = sleeping_disabled
 
         self.flush_thresh = int(flush_proportion * reading_queue.maxsize)
         # Make video capture now so we can dynamically retrieve its FPS and frame size
@@ -95,7 +97,7 @@ class Reader(LoggingThread):
             # this happens for a *live* feed (i.e. webcam) since it means you
             # will lose the next `self.sleep_seconds` seconds of footage, but is
             # fine if working with video files as input
-            if self.reading_queue.qsize() >= self.flush_thresh:
+            if self.reading_queue.qsize() >= self.flush_thresh and not self.sleeping_disabled:
                 self.debug(
                     f"Queue filled up to threshold. Sleeping {self.sleep_seconds} seconds to make sure queue can be drained..."
                 )
