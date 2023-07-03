@@ -57,6 +57,7 @@ def main_loop(config: Config, output_directory: Path, LOGGER: logging.Logger):
             filepath=video_filepath,
             stop_signal=stop_signal,
             logger=LOGGER,
+            sleeping_writer=config.sleeping_writer
         ),
     )
 

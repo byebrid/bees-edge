@@ -22,6 +22,7 @@ class Writer(LoggingThread):
         stop_signal: Event,
         logger: Logger,
         sleep_seconds: float = 0.1,
+        sleeping_writer: bool = False
     ) -> None:
         super().__init__(name="WriterThread", logger=logger)
 
@@ -30,6 +31,7 @@ class Writer(LoggingThread):
         self.frame_size = frame_size
         self.fps = fps
         self.stop_signal = stop_signal
+        self.sleeping_writer = sleeping_writer
 
         # For smart sleep every iteration
         self.sleep_seconds = sleep_seconds
@@ -49,7 +51,8 @@ class Writer(LoggingThread):
         writing_queue: Queue,
         filepath: str,
         stop_signal: Event,
-        logger: Logger
+        logger: Logger,
+        sleeping_writer: bool = False
     ) -> Writer:
         """Convenience method to generate a Writer from a Reader.
 
@@ -86,6 +89,7 @@ class Writer(LoggingThread):
             fps=fps,
             stop_signal=stop_signal,
             logger=logger,
+            sleeping_writer=sleeping_writer
         )
         return writer
 
@@ -102,12 +106,13 @@ class Writer(LoggingThread):
 
         loop_is_running = True
         while loop_is_running:
-            self.smart_sleep()
+            if self.sleeping_writer:
+                self.smart_sleep()
 
             # Only flush the threshold number of frames, OR remaining frames if there are only a few left
             flush_thresh = int(0.65 * self.writing_queue.maxsize)
             frames_to_flush = min(self.writing_queue.qsize(), flush_thresh)
-            self.debug(f"Flushing {frames_to_flush} frames...")
+            # self.debug(f"Flushing {frames_to_flush} frames...")
 
             for i in range(frames_to_flush):
                 try:
@@ -138,7 +143,7 @@ class Writer(LoggingThread):
 
                 if self.frame_count % 1000 == 0:
                     self.info(f"Written {self.frame_count} frames so far")
-            self.debug(f"Flushed {frames_to_flush} frames!")
+            # self.debug(f"Flushed {frames_to_flush} frames!")
 
         vw.release()
 
