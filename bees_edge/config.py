@@ -15,24 +15,18 @@ class Config:
     def __init__(
         self,
         video_source: str,
-        reader_sleep_seconds: float,
-        reader_flush_proportion: float,
         downscale_factor: int,
         dilate_kernel_size: int,
         movement_threshold: int,
         persist_factor: float,
         num_opencv_threads: int,
-        sleeping_disabled: bool
     ) -> None:
         self.video_source = video_source
-        self.reader_sleep_seconds = reader_sleep_seconds
-        self.reader_flush_proportion = reader_flush_proportion
         self.downscale_factor = downscale_factor
         self.dilate_kernel_size = dilate_kernel_size
         self.movement_threshold = movement_threshold
         self.persist_factor = persist_factor
         self.num_opencv_threads = num_opencv_threads
-        self.sleeping_disabled = sleeping_disabled
 
     @staticmethod
     def from_json_file(filepath: Path) -> Config:

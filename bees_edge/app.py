@@ -39,8 +39,6 @@ def main_loop(config: Config, output_directory: Path, LOGGER: logging.Logger):
             reading_queue=reading_queue,
             video_source=config.video_source,
             stop_signal=stop_signal,
-            sleep_seconds=config.reader_sleep_seconds,
-            flush_proportion=config.reader_flush_proportion,
             logger=LOGGER,
         ),
         motion_detector := MotionDetector(
