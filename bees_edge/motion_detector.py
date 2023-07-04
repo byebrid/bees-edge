@@ -31,7 +31,7 @@ class MotionDetector(LoggingThread):
         self.writing_queue = writing_queue
         self.stop_signal = stop_signal
 
-        self.prev_frame = None
+        self.prev_gray = None
         self.prev_diff = None
 
         # For motion detection
@@ -48,7 +48,7 @@ class MotionDetector(LoggingThread):
             )
 
     def run(self) -> None:
-        self.prev_frame = None
+        self.prev_gray = None
 
         while True:
             try:
@@ -78,23 +78,24 @@ class MotionDetector(LoggingThread):
         else:
             downscaled_frame = cv2.resize(frame, dsize=None, fx=self.fx, fy=self.fy)
 
-        if self.prev_frame is None:
-            self.prev_frame = downscaled_frame
-        if self.prev_diff is None:
-            self.prev_diff = np.zeros(self.prev_frame.shape, dtype=np.uint8)
+        # Convert to grayscale
+        gray = cv2.cvtColor(downscaled_frame, cv2.COLOR_BGR2GRAY)
+        if self.prev_gray is None:
+            self.prev_gray = gray
+
 
         # Compute pixel difference between consecutive frames (note this still has 3 channels)
-        # Note that previous frame was already downscaled!
-        diff = cv2.absdiff(downscaled_frame, self.prev_frame)
+        diff = cv2.absdiff(gray, self.prev_gray)
+        if self.prev_diff is None:
+            self.prev_diff = np.zeros(diff.shape, dtype=np.uint8)
         # Add decayed version of previous diff to help temporarily stationary bees "persist"
+        # Note the astype() is necessary, otherwise just get noise all over the frame
         diff += (self.prev_diff * self.persist_factor).astype(np.uint8)
-
-        # Convert to grayscale
-        gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        
         # Cut off pixels that did not have "enough" movement. This is now a 2D array
         # of just 1s and 0s
         _, threshed_diff = cv2.threshold(
-            src=gray, thresh=self.movement_threshold, maxval=255, type=cv2.THRESH_BINARY
+            src=diff, thresh=self.movement_threshold, maxval=255, type=cv2.THRESH_BINARY
         )
         mask = cv2.dilate(threshed_diff, kernel=self.dilation_kernel)
 
@@ -106,7 +107,7 @@ class MotionDetector(LoggingThread):
         mask = mask.astype(bool)
 
         # Save downscaled frame for use in next iteration
-        self.prev_frame = downscaled_frame
+        self.prev_gray = gray
         # Note that we don't save the thresholded diff here. Otherwise, movement
         # could only persist across single frames at most, which is no good!
         self.prev_diff = diff

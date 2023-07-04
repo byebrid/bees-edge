@@ -1,10 +1,9 @@
 {
     "video_source": 0,
-    "reader_sleep_seconds": 5,
-    "reader_flush_proportion": 0.9,
-    "downscale_factor": 16,
-    "dilate_kernel_size": 63,
+    "downscale_factor": 2,
+    "dilate_kernel_size": 128,
     "movement_threshold": 40,
     "persist_factor": 0,
-    "num_opencv_threads": 10
+    "num_opencv_threads": 10,
+    "sleeping_writer": true
 }
