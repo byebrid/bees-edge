@@ -1,12 +1,15 @@
 from __future__ import annotations
+import csv
 
 from logging import Logger
+from pathlib import Path
 from queue import Empty, Queue
 from threading import Event
 import time
 from typing import Tuple
 
 import cv2
+import numpy as np
 
 from bees_edge.logging_thread import LoggingThread
 from bees_edge.reader import Reader
@@ -112,7 +115,6 @@ class Writer(LoggingThread):
             # Only flush the threshold number of frames, OR remaining frames if there are only a few left
             flush_thresh = int(0.65 * self.writing_queue.maxsize)
             frames_to_flush = min(self.writing_queue.qsize(), flush_thresh)
-            # self.debug(f"Flushing {frames_to_flush} frames...")
 
             for i in range(frames_to_flush):
                 try:
@@ -125,19 +127,17 @@ class Writer(LoggingThread):
                     loop_is_running = False
                     break
 
-                vw.write(frame)
-                # TODO: Re-add the frame omission, only commenting it out for downscaling experiment
-                # # Ignore frames that have *zero* movement in them
-                # if np.any(frame):
-                #     vw.write(frame)
-                #     if currently_omitting:
-                #         # Append *end* of all-black interval to list
-                #         currently_omitting = False
-                #         omitted_frames.append(self.frame_count)
-                # elif not currently_omitting:
-                #     # Append *start* of all-black interval to list
-                #     currently_omitting = True
-                #     omitted_frames.append(self.frame_count)
+                # Ignore frames that have *zero* movement in them
+                if np.any(frame):
+                    vw.write(frame)
+                    if currently_omitting:
+                        # Append *end* of all-black interval to list
+                        currently_omitting = False
+                        omitted_frames.append(self.frame_count)
+                elif not currently_omitting:
+                    # Append *start* of all-black interval to list
+                    currently_omitting = True
+                    omitted_frames.append(self.frame_count)
                 
                 self.frame_count += 1
 
@@ -147,14 +147,13 @@ class Writer(LoggingThread):
 
         vw.release()
 
-        # TODO: Re-add the frame omission, only commenting it out for downscaling experiment
-        # # Write CSV file with omitted frame indices. Note this is not the most
-        # # space-efficient way to store these, but it's probs good enough
-        # output_dir = Path(self.filepath).parent
-        # csv_filepath = output_dir / "omitted_frames.csv"
-        # with open(csv_filepath, "w") as f:
-        #     csv_writer = csv.writer(f)
-        #     csv_writer.writerow(omitted_frames)
+        # Write CSV file with omitted frame indices. Note this is not the most
+        # space-efficient way to store these, but it's probs good enough
+        output_dir = Path(self.filepath).parent
+        csv_filepath = output_dir / "omitted_frames.csv"
+        with open(csv_filepath, "w") as f:
+            csv_writer = csv.writer(f)
+            csv_writer.writerow(omitted_frames)
 
     def smart_sleep(self):
         time.sleep(self.sleep_seconds)
