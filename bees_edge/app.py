@@ -9,6 +9,7 @@ from queue import Queue
 from threading import Event
 
 import cv2
+import yappi
 
 # Hate doing this, but simplest way to let python import sibling directories without
 # actually installing this repo as a package
@@ -97,6 +98,8 @@ def main_loop(config: Config, output_directory: Path, LOGGER: logging.Logger):
 
 
 def main(config: Config):
+    yappi.start()
+
     # Figure out output filepath for this particular run
     output_directory = Path(f"out/{datetime.now()}")
     output_directory.mkdir()
@@ -128,8 +131,25 @@ def main(config: Config):
 
     LOGGER.info(f"Finished main() in {duration_seconds:.2f} seconds.")
 
+    yappi.stop()
+
+    # Log profiling stats
+    LOGGER.info(f"Preparing profile...")
+    threads = yappi.get_thread_stats()
+
+    profile_filepath = output_directory / "profile.txt"
+    with open(profile_filepath, "w") as f:
+        for thread in threads:
+            print(f"\n\nFunction stats for ({thread.name}) ({thread.id})", file=f)
+            # LOGGER.debug(f"Function stats for ({thread.name}) ({thread.id})")
+            yappi.get_func_stats(ctx_id=thread.id).print_all(out=f)
+    
+    LOGGER.info(f"Profile saved to {profile_filepath}")
+
 
 if __name__ == "__main__":
+    yappi.set_clock_type("cpu")
+    
     configs = Config.from_json_file_many(Path("config.json"))
     for config in configs:
         main(config=config)

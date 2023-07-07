@@ -5,4 +5,5 @@ dependencies:
   - numpy>=1.23
   - tqdm=4.64
   - pandas=1.4
+  - yappi
   - pip
