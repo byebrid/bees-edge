@@ -5,5 +5,8 @@
     "movement_threshold": 40,
     "persist_factor": 0,
     "num_opencv_threads": 10,
-    "sleeping_writer": true
+    "sleeping_writer": true,
+    "reading_queue_size": 512,
+    "motion_queue_size": 512,
+    "writing_queue_size": 512
 }

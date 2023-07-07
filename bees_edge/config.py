@@ -20,7 +20,10 @@ class Config:
         movement_threshold: int,
         persist_factor: float,
         num_opencv_threads: int,
-        sleeping_writer: bool
+        sleeping_writer: bool,
+        reading_queue_size: int,
+        motion_queue_size: int,
+        writing_queue_size: int
     ) -> None:
         self.video_source = video_source
         self.downscale_factor = downscale_factor
@@ -29,6 +32,9 @@ class Config:
         self.persist_factor = persist_factor
         self.num_opencv_threads = num_opencv_threads
         self.sleeping_writer = sleeping_writer
+        self.reading_queue_size = reading_queue_size
+        self.motion_queue_size = motion_queue_size
+        self.writing_queue_size = writing_queue_size
 
     @staticmethod
     def from_json_file(filepath: Path) -> Config:

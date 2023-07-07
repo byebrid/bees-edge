@@ -26,9 +26,9 @@ from bees_edge.writer import Writer
 
 def main_loop(config: Config, output_directory: Path, LOGGER: logging.Logger):
     # Create queues for transferring data between threads (or processes)
-    reading_queue = Queue(maxsize=512)
-    motion_input_queue = Queue(maxsize=512)
-    writing_queue = Queue(maxsize=512)
+    reading_queue = Queue(maxsize=config.reading_queue_size)
+    motion_input_queue = Queue(maxsize=config.motion_queue_size)
+    writing_queue = Queue(maxsize=config.writing_queue_size)
 
     stop_signal = Event()
 
