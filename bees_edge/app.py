@@ -102,7 +102,7 @@ def main(config: Config):
 
     # Figure out output filepath for this particular run
     output_directory = Path(f"out/{datetime.now()}")
-    output_directory.mkdir()
+    output_directory.mkdir(parents=True, exist_ok=True)
 
     # Create some handlers for logging output to both console and file
     LOGGER = get_logger(output_directory=output_directory)

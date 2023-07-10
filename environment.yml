@@ -1,9 +1,6 @@
 name: bees-edge
 dependencies:
-  - python=3.10
-  - opencv=4.6
-  - numpy>=1.23
-  - tqdm=4.64
-  - pandas=1.4
-  - yappi
+  - python=3.11
   - pip
+  - pip:
+    - -r requirements.txt

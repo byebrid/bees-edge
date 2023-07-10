@@ -30,7 +30,7 @@ class Writer(LoggingThread):
         super().__init__(name="WriterThread", logger=logger)
 
         self.writing_queue = writing_queue
-        self.filepath = filepath
+        self.filepath = Path(filepath)
         self.frame_size = frame_size
         self.fps = fps
         self.stop_signal = stop_signal
@@ -44,6 +44,9 @@ class Writer(LoggingThread):
         self.info(
             f"Will flush buffer to output file every {self.flush_thresh} frames"
         )
+
+        # Ensure ouput directory is created
+        self.filepath.parent.mkdir(parents=True, exist_ok=True)
 
         self.frame_count = 0
 
