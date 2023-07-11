@@ -83,6 +83,56 @@ network={
 }
 ```
 
+### 🛜 Connecting the raspberry pi to other Wifi networks
+Read this if you're using a headless OS on the raspberry pi and want to connect to multiple wifi networks.
+
+One option I didn't test is simply adding multiple networks to the `wpa_supplicant.conf` file (see [this stackoverflow post](https://raspberrypi.stackexchange.com/a/40144)). I didn't do this myself because this file is removed from the boot partition upon booting the Pi, and I wasn't sure if I could edit it in the main filesystem after the fact or create a new copy in the boot partition.
+
+I relied on this [ArchLinux wiki page](https://wiki.archlinux.org/title/wpa_supplicant) for a lot of this.
+
+Instead, I connected to my Pi via ssh. I then ran
+```shell
+$ wpa_cli -i wlan0
+```
+I found that if I didn't specify the wlan0 interface, `wpa_cli` would choose the wrong interface and so couldn't detect any wifi networks (see [this ArchLinux thread](https://bbs.archlinux.org/viewtopic.php?id=234877)).
+
+Start your mobile phone's hotspot.
+
+At this point, scan for all available wifi networks using
+```shell
+> scan
+OK
+```
+
+Wait for the message confirming that the scan finished. Then list all networks using
+```shell
+> scan_results
+```
+
+Search for your phone's hotspot's SSID. If you notice encoded bytes in the SSID (e.g. "\xC3\xA9"), I would recommend just changing your hotspot's name to use safe/boring characters, and do the scan again. Otherwise, you'll want to [encode your SSID into hex](https://raspberrypi.stackexchange.com/a/103637).
+
+Once you've verified your hotspot is available, do
+```shell
+> add_network
+1
+> set_network 1 ssid "<hotspot's SSID>"
+> set_network 1 psk "<hotspot's password>"
+> enable_network 1
+```
+
+`add_network` creates a new *empty* network configuration. You then edit this configuration using those `set_network` commands. Note that the ID following `set_network` should match that returned by `add_network`!
+
+I didn't actually confirm if you need to do `enable_network` when already connected to a wifi network, but better to be safe than sorry! This *may* be needed to automatically connect to your hotspot if your normal wifi network is unavailable.
+
+To finish up,
+```shell
+> save_config
+OK
+> quit
+```
+
+Now test that everything by disabling your normal wifi network, connecting your personal computer to your mobile hotspot, and verifying that you can still ssh into the Pi. Another way of verifying the Pi has connected is by checking your phone to see how many devices are connected to your hotspot.
+
 ## Running the program
 Ensure your conda environment is activated:
 ```shell
@@ -102,6 +152,8 @@ If using a camera as input, **enter Ctrl-C to stop at any time. Give it a minute
 1. I've used the *lite* OS because it was just easier for me to SSH into the raspberry pi rather than rely on an external keyboard and monitor. The lite version presumably runs a little quicker too.
 2. I've used the *64*-bit OS so I have the option of using more than 3 GB memory for a single process (see [Wikipedia - 3 GB barrier](https://en.wikipedia.org/wiki/3_GB_barrier)).
 3. You don't *need* to use [conda](https://docs.conda.io/en/latest/). You could just use [pip](https://pip.pypa.io/en/stable/getting-started/), preferably with a virtual environment (e.g. [venv](https://docs.python.org/3/library/venv.html)). conda is just easy for me to document.
+
+
 
 ## Quick note on how to provide video input
 You can either use a live webcam or an existing video file as input. Simply change `video_source` in your config to either an integer (i.e. for live camera input, starts from 0) or string (for filepath). For filepaths, you can either specify a single video file, OR a directory of video files, in which case the script will run on each video file found in that directory.
