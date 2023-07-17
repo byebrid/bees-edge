@@ -78,7 +78,7 @@ class FPS:
         max_index = self.size if self.filled else self.pointer
         # Means we haven't even had a single frame go by
         if max_index == 0:
-            return None
+            return 0
 
         ave_duration = np.mean(self.durations[:max_index])
         ave_fps = 1 / ave_duration
