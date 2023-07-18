@@ -12,11 +12,12 @@ from pprint import pprint
 
 
 class PiReader(Thread):
-    def __init__(self, lores_queue, hires_queue, threshold: int, min_moving_pixels:int=30, bitrate: int=10_000_000, hires_size: tuple[int, int]=(1280, 720), lores_size:tuple[int, int]=(640, 480)):
+    def __init__(self, hires_queue: Queue, diff_queue: Queue, threshold: int, min_moving_pixels:int=30, bitrate: int=10_000_000, hires_size: tuple[int, int]=(1280, 720), lores_size:tuple[int, int]=(640, 480)):
         super().__init__(name="PiReaderThread")
 
-        self._lores_queue = lores_queue
         self._hires_queue = hires_queue
+        self._diff_queue = diff_queue
+
         self._threshold = 40
         self._min_moving_pixels = min_moving_pixels
         self._bitrate = bitrate
@@ -29,6 +30,11 @@ class PiReader(Thread):
         self._is_running = False
         self._use_lores = True
 
+        # This is the upper index for getting the Y channel from a lores YUV
+        # frame. Note that we just pick the first 'height' values to get
+        # grayscale (https://datasheets.raspberrypi.com/camera/picamera2-manual.pdf 6.1.1)
+        self._lores_grayscale_index = self._lores["size"][1]
+
     def run(self):
         self._is_running = True
         self._camera.start()
@@ -36,28 +42,17 @@ class PiReader(Thread):
 
         prev_lores_frame = None
 
-        # lores is YUV colorspace, and first 'height' rows give the Y 
-        # channel, the next height/4 rows contain the U channel and the 
-        # final height/4 rows contain the V channel (https://datasheets.raspberrypi.com/camera/picamera2-manual.pdf 6.1.1)
-        lores_grayscale_index = self._lores["size"][1]
-
         try:
             # Ensure we get at least on hires frame so output video file is
             # non-empty
-            self.disable_lores()
-            hires_frame = self._get_frame()
+            hires_frame = self._get_frame(lores=False)
             self._hires_queue.put(hires_frame)
 
             while self._is_running:
                 fps.tick()
                 print(f"{fps.get_average():.2f} FPS")
                 
-                # Read LOWres frame into queue
-                self.enable_lores()
-                lores_frame = self._get_frame()
-                # Get only the Y values from this YUV array, i.e. make grayscale
-                lores_frame = lores_frame[:lores_grayscale_index]
-
+                lores_frame = self._get_frame(lores=True, gray=True)
                 if prev_lores_frame is not None:
                     abs_diff = cv2.absdiff(lores_frame, prev_lores_frame)
                     movements = abs_diff > self._threshold
@@ -68,57 +63,73 @@ class PiReader(Thread):
                             continue
 
                         # Read HIres frame into queue
-                        self.disable_lores()
-                        hires_frame = self._get_frame()
+                        hires_frame = self._get_frame(lores=False)
                         self._hires_queue.put(hires_frame)
+                        self._diff_queue.put(abs_diff)
 
+                # Save current lores frame to compare with next frame
                 prev_lores_frame = lores_frame
         finally:
             self._camera.stop()
+            self._hires_queue.put(None)
+            self._diff_queue.put(None)
 
-    def _get_frame(self):
-        frame: np.ndarray = self._camera.capture_array(name=self._stream_name)
+    def _get_frame(self, lores:bool=False, gray:bool=False):
+        if lores:   
+            stream_name = "lores"
+        else:
+            stream_name = "main"
+        
+        frame: np.ndarray = self._camera.capture_array(name=stream_name)
+        # For now, we only allow grayscale for lores
+        if gray and lores:
+            frame = frame[:self._lores_grayscale_index]
+
         return frame
 
     def stop(self):
         self._is_running = False
 
-    def enable_lores(self):
-        self._use_lores = True
-        self._stream_name = "lores"
-        self._width = self._lores["size"][0]
-        self._height = self._lores["size"][1]
 
-    def disable_lores(self):
-        self._use_lores = False
-        self._stream_name = "main"
-        self._width = self._hires["size"][0]
-        self._height = self._hires["size"][1]
+class MotionDetector(Thread):
+    QUEUE_TIMEOUT_SECONDS = 20
 
+    def __init__(self, diff_queue: Queue, hires_queue: Queue, motion_detected_queue: list[Queue]):
+        super().__init__(name="MotionDetectorThread")
 
-# class MotionDetector(Thread):
-#     def __init__(self, lores_queue: Queue, hires_queue: Queue):
-#         super().__init__(name="MotionDetectorThread")
+        self._diff_queue = diff_queue
+        self._hires_queue = hires_queue
+        self._motion_detected_queue = motion_detected_queue
 
-#         self._lores_queue = lores_queue
-#         self._hires_queue = hires_queue
+        self._dilation_kernel = np.ones((10, 10))
+        self._is_running = False
 
-#         self._is_running = False
+    def run(self):
+        self._is_running = True
+        try:
+            while self._is_running:
+                # TODO: Fix queue timeout. This can timeout simply because there has
+                # been no motion for a while
+                diff_frame = self._diff_queue.get(timeout=self.QUEUE_TIMEOUT_SECONDS)
+                hires_frame = self._hires_queue.get(timeout=self.QUEUE_TIMEOUT_SECONDS)
+                if diff_frame is None or hires_frame is None:
+                    break
 
-#     def run():
-#         self._is_running = True
-#         while self._is_running:
-#             lores_frame = self._lores_queue.get()
-#             # hires_frame = self._hires_queue.get()
+                mask = cv2.dilate(diff_frame, kernel=self._dilation_kernel)
+                # Would like a cheaper way of upscaling this
+                mask = cv2.resize(mask, dsize=(hires_frame.shape[1], hires_frame.shape[0]))
+                mask = mask.astype(bool)
 
-#             if prev_lores_frame is None:
-#                 # If processing very first frame, we have no prev to compare to,
-#                 # so skip this iteration
-#                 prev_lores_frame = lores_frame
-#                 continue
+                # Return the final frame with only regions of "movement" included, everything
+                # else blacked out
+                motion_frame = np.zeros(shape=hires_frame.shape, dtype=np.uint8)
+                motion_frame[mask] = hires_frame[mask]
+                self._motion_detected_queue.put(motion_frame)
+        finally:
+            self._motion_detected_queue.put(None)
 
-#     def stop(self):
-#         self._is_running = False
+    def stop(self):
+        self._is_running = False
 
 
 class Writer(Thread):
@@ -160,20 +171,26 @@ class Writer(Thread):
 
 output = f"out/{datetime.datetime.now().isoformat()}.avi"
 
-lores_queue = Queue(maxsize=512)
-hires_queue = Queue(maxsize=512)
+hires_queue = Queue(maxsize=128) 
+diff_queue = Queue(maxsize=128)
+motion_detected_queue = Queue(maxsize=128)
+
 hires_size = (1280, 720)
 lores_size = (640, 480)
 
-reader = PiReader(threshold=200, hires_size=hires_size, hires_queue=hires_queue, lores_queue=lores_queue, lores_size=lores_size)
-writer = Writer(file=output, size=hires_size, fps=30, queue=hires_queue)
+reader = PiReader(threshold=200, lores_size=lores_size, hires_size=hires_size, hires_queue=hires_queue, diff_queue=diff_queue)
+motion_detector = MotionDetector(hires_queue=hires_queue, diff_queue=diff_queue, motion_detected_queue=motion_detected_queue)
+writer = Writer(file=output, size=hires_size, fps=30, queue=motion_detected_queue)
 
 writer.start()
+motion_detector.start()
 reader.start()
 
 timeout = datetime.timedelta(seconds=5)
 try:
-    sleep(timeout.seconds)
+    print(f"Sleeping for {timeout.total_seconds()} seconds")
+    sleep(timeout.total_seconds())
+    print("Timed out")
 finally:
     print("Releasing resources...")
     
