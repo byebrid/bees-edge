@@ -12,29 +12,45 @@ from pathlib import Path
 
 class Config:
     """Configuration class just to provide better parameter hints in code editor."""
+    
+    # These keys are naturally list-like (e.g. have 2 elements, width & height), 
+    # so flag them as such. Important when converting a single JSON file to many
+    # Config objects, since that generates combinations of Configs based on which
+    # parameter values are (unnaturally) lists or not.
+    # We assume we'll only ever need *one*-level lists, no further nesting
+    _NATURALLY_LISTS = (
+        "hires_size"
+        "lores_size"
+    )
+
     def __init__(
         self,
-        video_source: str,
-        downscale_factor: int,
-        dilate_kernel_size: int,
-        movement_threshold: int,
-        persist_factor: float,
-        num_opencv_threads: int,
-        sleeping_writer: bool,
-        reading_queue_size: int,
-        motion_queue_size: int,
-        writing_queue_size: int
+        frame_guarantee_interval: int,
+        hires_size: int,
+        lores_size: int,
+        threshold: int,
+        min_moving_pixels: int,
+        queue_size: int,
+        output_fps: int,
+        timeout_seconds: int,
+        out_root_directory: str,
+        dilation_size: int
     ) -> None:
-        self.video_source = video_source
-        self.downscale_factor = downscale_factor
-        self.dilate_kernel_size = dilate_kernel_size
-        self.movement_threshold = movement_threshold
-        self.persist_factor = persist_factor
-        self.num_opencv_threads = num_opencv_threads
-        self.sleeping_writer = sleeping_writer
-        self.reading_queue_size = reading_queue_size
-        self.motion_queue_size = motion_queue_size
-        self.writing_queue_size = writing_queue_size
+        self._d = {
+            "frame_guarantee_interval": frame_guarantee_interval,
+            "hires_size": hires_size,
+            "lores_size": lores_size,
+            "threshold": threshold,
+            "min_moving_pixels": min_moving_pixels,
+            "queue_size": queue_size,
+            "output_fps": output_fps,
+            "timeout_seconds": timeout_seconds,
+            "out_root_directory": out_root_directory,
+            "dilation_size": dilation_size
+        } 
+
+    def __getattr__(self, name: str):
+        return self._d[name]
 
     @staticmethod
     def from_json_file(filepath: Path) -> Config:
@@ -73,8 +89,12 @@ class Config:
 
         for key, value in config_dict.items():
             # Cast every parameter to be a list, even if it's just a single element
-            if type(value) is not list:
+            if not isinstance(value, list):
                 config_dict[key] = [value]
+            elif key in Config._NATURALLY_LISTS:
+                # Check for nested list in this case
+                if not isinstance(value[0], list):
+                    config_dict[key] = [value]
 
         # Get every combination of parameter values now
         value_combos = product(*config_dict.values())

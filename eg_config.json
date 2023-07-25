@@ -1,12 +1,12 @@
 {
-    "video_source": 0,
-    "downscale_factor": 2,
-    "dilate_kernel_size": 128,
-    "movement_threshold": 40,
-    "persist_factor": 0,
-    "num_opencv_threads": 10,
-    "sleeping_writer": true,
-    "reading_queue_size": 512,
-    "motion_queue_size": 512,
-    "writing_queue_size": 512
+    "frame_guarantee_interval": 30,
+    "hires_size": [640, 480],
+    "lores_size": [640, 480],
+    "threshold": 50,
+    "min_moving_pixels": 30,
+    "queue_size": 128,
+    "output_fps": 30,
+    "timeout_seconds": 30,
+    "out_root_directory": "out",
+    "dilation_size": 10
 }
